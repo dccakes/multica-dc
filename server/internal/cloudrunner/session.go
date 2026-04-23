@@ -8,6 +8,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/runtimepolicy"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -119,6 +120,23 @@ func (s *SessionService) RecordSnapshot(ctx context.Context, in RecordSnapshotIn
 		return fmt.Errorf("issue_id and chat_session_id are mutually exclusive")
 	}
 
+	checkpoint := runtimepolicy.Checkpoint{
+		RunID:          firstNonEmpty(in.CodexSessionID, in.SandboxID, in.RuntimeID),
+		RuntimeID:      in.RuntimeID,
+		AgentID:        in.AgentID,
+		IssueID:        in.IssueID,
+		ChatSessionID:  in.ChatSessionID,
+		ExecutionState: runtimepolicy.CompletionStateDone,
+		SandboxID:      in.SandboxID,
+		SnapshotID:     in.SnapshotID,
+		WorkDir:        in.LastWorkdir,
+		Branch:         in.LastBranch,
+		SessionID:      in.CodexSessionID,
+	}
+	if err := runtimepolicy.ValidateCheckpoint(checkpoint); err != nil {
+		return err
+	}
+
 	expiresAt := pgtype.Timestamptz{}
 	createdAt := pgtype.Timestamptz{}
 	if !in.SnapshotExpiry.IsZero() {
@@ -165,4 +183,13 @@ func strText(s string) pgtype.Text {
 		return pgtype.Text{}
 	}
 	return pgtype.Text{String: s, Valid: true}
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }
