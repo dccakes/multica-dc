@@ -29,6 +29,8 @@ function RuntimeListItem({
   hasUpdate: boolean;
   onClick: () => void;
 }) {
+  const runtimeModeLabel = runtime.runtime_mode === "cloud" ? "remote" : "local";
+
   return (
     <button
       onClick={onClick}
@@ -50,9 +52,11 @@ function RuntimeListItem({
                 size={14}
               />
               <span className="truncate">{ownerMember.name}</span>
+              <span aria-hidden="true">•</span>
+              <span className="truncate">{runtimeModeLabel}</span>
             </>
           ) : (
-            <span className="truncate">{runtime.runtime_mode}</span>
+            <span className="truncate">{runtimeModeLabel}</span>
           )}
         </div>
       </div>
