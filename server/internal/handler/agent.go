@@ -136,6 +136,14 @@ type AgentTaskResponse struct {
 	ChatMessage           string         `json:"chat_message,omitempty"`            // user message for chat tasks
 }
 
+// AgentTaskClaimResponse extends the regular task payload with runtime
+// metadata needed by cloudrunner providers. This field is only emitted on the
+// claim endpoint so task list APIs keep their existing shape.
+type AgentTaskClaimResponse struct {
+	AgentTaskResponse
+	RuntimeMetadata map[string]any `json:"runtime_metadata"`
+}
+
 // TaskAgentData holds agent info included in claim responses so the daemon
 // can set up the execution environment (branch naming, skill files, instructions).
 type TaskAgentData struct {
@@ -168,6 +176,16 @@ func taskToResponse(t db.AgentTaskQueue) AgentTaskResponse {
 		Error:            textToPtr(t.Error),
 		CreatedAt:        timestampToString(t.CreatedAt),
 		TriggerCommentID: uuidToPtr(t.TriggerCommentID),
+	}
+}
+
+func taskClaimToResponse(t db.AgentTaskQueue, runtimeMetadata map[string]any) AgentTaskClaimResponse {
+	if runtimeMetadata == nil {
+		runtimeMetadata = map[string]any{}
+	}
+	return AgentTaskClaimResponse{
+		AgentTaskResponse: taskToResponse(t),
+		RuntimeMetadata:   runtimeMetadata,
 	}
 }
 

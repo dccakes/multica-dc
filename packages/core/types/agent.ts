@@ -223,3 +223,58 @@ export interface RuntimeModelsResult {
   models: RuntimeModel[];
   supported: boolean;
 }
+
+export interface CloudRuntimeCredential {
+  id: string;
+  workspace_id: string;
+  name: string;
+  provider: string;
+  project_id: string;
+  team_id: string | null;
+  base_snapshot_id: string | null;
+  region: string;
+  status: string;
+  last_tested_at: string | null;
+  last_test_error: string | null;
+  owner_id: string;
+  created_at: string;
+  updated_at: string;
+  has_token: boolean;
+}
+
+export interface CreateVercelCloudRuntimeCredentialRequest {
+  name: string;
+  token: string;
+  project_id: string;
+  team_id?: string;
+  base_snapshot_id?: string;
+  region?: string;
+}
+
+export interface UpdateVercelCloudRuntimeCredentialRequest {
+  name?: string;
+  project_id?: string;
+  team_id?: string;
+  base_snapshot_id?: string;
+  region?: string;
+  status?: string;
+}
+
+export interface CloudCredentialTestResult {
+  credential_id: string;
+  provider: string;
+  ok: boolean;
+  status: string;
+  checked_at: string;
+  message: string;
+}
+
+export interface CloudCredentialBootstrapResult {
+  credential_id: string;
+  provider: string;
+  status: string;
+  project_id: string;
+  region: string;
+  command: string;
+  team_id?: string;
+}

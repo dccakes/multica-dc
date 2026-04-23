@@ -58,6 +58,7 @@ type AgentRuntime struct {
 	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
 	OwnerID        pgtype.UUID        `json:"owner_id"`
 	LegacyDaemonID pgtype.Text        `json:"legacy_daemon_id"`
+	CredentialID   pgtype.UUID        `json:"credential_id"`
 }
 
 type AgentSkill struct {
@@ -171,6 +172,41 @@ type ChatSession struct {
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
 	UnreadSince pgtype.Timestamptz `json:"unread_since"`
+}
+
+type CloudRuntimeCredential struct {
+	ID             pgtype.UUID        `json:"id"`
+	WorkspaceID    pgtype.UUID        `json:"workspace_id"`
+	Name           string             `json:"name"`
+	Provider       string             `json:"provider"`
+	EncryptedToken string             `json:"encrypted_token"`
+	ProjectID      string             `json:"project_id"`
+	TeamID         pgtype.Text        `json:"team_id"`
+	BaseSnapshotID pgtype.Text        `json:"base_snapshot_id"`
+	Region         string             `json:"region"`
+	Status         string             `json:"status"`
+	LastTestedAt   pgtype.Timestamptz `json:"last_tested_at"`
+	LastTestError  pgtype.Text        `json:"last_test_error"`
+	OwnerID        pgtype.UUID        `json:"owner_id"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+}
+
+type CloudRuntimeSession struct {
+	ID                 pgtype.UUID        `json:"id"`
+	RuntimeID          pgtype.UUID        `json:"runtime_id"`
+	AgentID            pgtype.UUID        `json:"agent_id"`
+	IssueID            pgtype.UUID        `json:"issue_id"`
+	ChatSessionID      pgtype.UUID        `json:"chat_session_id"`
+	LastSandboxID      pgtype.Text        `json:"last_sandbox_id"`
+	LastSnapshotID     pgtype.Text        `json:"last_snapshot_id"`
+	SnapshotCreatedAt  pgtype.Timestamptz `json:"snapshot_created_at"`
+	SnapshotExpiresAt  pgtype.Timestamptz `json:"snapshot_expires_at"`
+	LastWorkdir        pgtype.Text        `json:"last_workdir"`
+	LastBranch         pgtype.Text        `json:"last_branch"`
+	LastCodexSessionID pgtype.Text        `json:"last_codex_session_id"`
+	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
 }
 
 type Comment struct {

@@ -22,6 +22,80 @@ func (q *Queries) CountActiveAgentsByRuntime(ctx context.Context, runtimeID pgty
 	return count, err
 }
 
+const createCloudRuntimeCredential = `-- name: CreateCloudRuntimeCredential :one
+INSERT INTO cloud_runtime_credential (
+    workspace_id,
+    name,
+    provider,
+    encrypted_token,
+    project_id,
+    team_id,
+    base_snapshot_id,
+    region,
+    status,
+    owner_id
+) VALUES (
+    $1,
+    $2,
+    $3,
+    $4,
+    $5,
+    $6,
+    $7,
+    $8,
+    $9,
+    $10
+)
+RETURNING id, workspace_id, name, provider, encrypted_token, project_id, team_id, base_snapshot_id, region, status, last_tested_at, last_test_error, owner_id, created_at, updated_at
+`
+
+type CreateCloudRuntimeCredentialParams struct {
+	WorkspaceID    pgtype.UUID `json:"workspace_id"`
+	Name           string      `json:"name"`
+	Provider       string      `json:"provider"`
+	EncryptedToken string      `json:"encrypted_token"`
+	ProjectID      string      `json:"project_id"`
+	TeamID         pgtype.Text `json:"team_id"`
+	BaseSnapshotID pgtype.Text `json:"base_snapshot_id"`
+	Region         string      `json:"region"`
+	Status         string      `json:"status"`
+	OwnerID        pgtype.UUID `json:"owner_id"`
+}
+
+func (q *Queries) CreateCloudRuntimeCredential(ctx context.Context, arg CreateCloudRuntimeCredentialParams) (CloudRuntimeCredential, error) {
+	row := q.db.QueryRow(ctx, createCloudRuntimeCredential,
+		arg.WorkspaceID,
+		arg.Name,
+		arg.Provider,
+		arg.EncryptedToken,
+		arg.ProjectID,
+		arg.TeamID,
+		arg.BaseSnapshotID,
+		arg.Region,
+		arg.Status,
+		arg.OwnerID,
+	)
+	var i CloudRuntimeCredential
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Name,
+		&i.Provider,
+		&i.EncryptedToken,
+		&i.ProjectID,
+		&i.TeamID,
+		&i.BaseSnapshotID,
+		&i.Region,
+		&i.Status,
+		&i.LastTestedAt,
+		&i.LastTestError,
+		&i.OwnerID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const deleteAgentRuntime = `-- name: DeleteAgentRuntime :exec
 DELETE FROM agent_runtime WHERE id = $1
 `
@@ -37,6 +111,22 @@ DELETE FROM agent WHERE runtime_id = $1 AND archived_at IS NOT NULL
 
 func (q *Queries) DeleteArchivedAgentsByRuntime(ctx context.Context, runtimeID pgtype.UUID) error {
 	_, err := q.db.Exec(ctx, deleteArchivedAgentsByRuntime, runtimeID)
+	return err
+}
+
+const deleteCloudRuntimeCredential = `-- name: DeleteCloudRuntimeCredential :exec
+DELETE FROM cloud_runtime_credential
+WHERE id = $1
+  AND workspace_id = $2
+`
+
+type DeleteCloudRuntimeCredentialParams struct {
+	ID          pgtype.UUID `json:"id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+func (q *Queries) DeleteCloudRuntimeCredential(ctx context.Context, arg DeleteCloudRuntimeCredentialParams) error {
+	_, err := q.db.Exec(ctx, deleteCloudRuntimeCredential, arg.ID, arg.WorkspaceID)
 	return err
 }
 
@@ -115,7 +205,7 @@ func (q *Queries) FailTasksForOfflineRuntimes(ctx context.Context) ([]FailTasksF
 }
 
 const findLegacyRuntimesByDaemonID = `-- name: FindLegacyRuntimesByDaemonID :many
-SELECT id, workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at, created_at, updated_at, owner_id, legacy_daemon_id FROM agent_runtime
+SELECT id, workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at, created_at, updated_at, owner_id, legacy_daemon_id, credential_id FROM agent_runtime
 WHERE workspace_id = $1
   AND provider = $2
   AND LOWER(daemon_id) = LOWER($3)
@@ -166,6 +256,7 @@ func (q *Queries) FindLegacyRuntimesByDaemonID(ctx context.Context, arg FindLega
 			&i.UpdatedAt,
 			&i.OwnerID,
 			&i.LegacyDaemonID,
+			&i.CredentialID,
 		); err != nil {
 			return nil, err
 		}
@@ -178,7 +269,7 @@ func (q *Queries) FindLegacyRuntimesByDaemonID(ctx context.Context, arg FindLega
 }
 
 const getAgentRuntime = `-- name: GetAgentRuntime :one
-SELECT id, workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at, created_at, updated_at, owner_id, legacy_daemon_id FROM agent_runtime
+SELECT id, workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at, created_at, updated_at, owner_id, legacy_daemon_id, credential_id FROM agent_runtime
 WHERE id = $1
 `
 
@@ -200,12 +291,13 @@ func (q *Queries) GetAgentRuntime(ctx context.Context, id pgtype.UUID) (AgentRun
 		&i.UpdatedAt,
 		&i.OwnerID,
 		&i.LegacyDaemonID,
+		&i.CredentialID,
 	)
 	return i, err
 }
 
 const getAgentRuntimeForWorkspace = `-- name: GetAgentRuntimeForWorkspace :one
-SELECT id, workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at, created_at, updated_at, owner_id, legacy_daemon_id FROM agent_runtime
+SELECT id, workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at, created_at, updated_at, owner_id, legacy_daemon_id, credential_id FROM agent_runtime
 WHERE id = $1 AND workspace_id = $2
 `
 
@@ -232,12 +324,117 @@ func (q *Queries) GetAgentRuntimeForWorkspace(ctx context.Context, arg GetAgentR
 		&i.UpdatedAt,
 		&i.OwnerID,
 		&i.LegacyDaemonID,
+		&i.CredentialID,
+	)
+	return i, err
+}
+
+const getCloudRuntimeCredential = `-- name: GetCloudRuntimeCredential :one
+SELECT id, workspace_id, name, provider, encrypted_token, project_id, team_id, base_snapshot_id, region, status, last_tested_at, last_test_error, owner_id, created_at, updated_at FROM cloud_runtime_credential
+WHERE id = $1
+  AND workspace_id = $2
+`
+
+type GetCloudRuntimeCredentialParams struct {
+	ID          pgtype.UUID `json:"id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+func (q *Queries) GetCloudRuntimeCredential(ctx context.Context, arg GetCloudRuntimeCredentialParams) (CloudRuntimeCredential, error) {
+	row := q.db.QueryRow(ctx, getCloudRuntimeCredential, arg.ID, arg.WorkspaceID)
+	var i CloudRuntimeCredential
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Name,
+		&i.Provider,
+		&i.EncryptedToken,
+		&i.ProjectID,
+		&i.TeamID,
+		&i.BaseSnapshotID,
+		&i.Region,
+		&i.Status,
+		&i.LastTestedAt,
+		&i.LastTestError,
+		&i.OwnerID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getCloudRuntimeSessionForIssue = `-- name: GetCloudRuntimeSessionForIssue :one
+SELECT id, runtime_id, agent_id, issue_id, chat_session_id, last_sandbox_id, last_snapshot_id, snapshot_created_at, snapshot_expires_at, last_workdir, last_branch, last_codex_session_id, created_at, updated_at FROM cloud_runtime_session
+WHERE runtime_id = $1
+  AND cloud_runtime_session.agent_id = $2
+  AND cloud_runtime_session.issue_id = $3
+`
+
+type GetCloudRuntimeSessionForIssueParams struct {
+	RuntimeID pgtype.UUID `json:"runtime_id"`
+	AgentID   pgtype.UUID `json:"agent_id"`
+	IssueID   pgtype.UUID `json:"issue_id"`
+}
+
+func (q *Queries) GetCloudRuntimeSessionForIssue(ctx context.Context, arg GetCloudRuntimeSessionForIssueParams) (CloudRuntimeSession, error) {
+	row := q.db.QueryRow(ctx, getCloudRuntimeSessionForIssue, arg.RuntimeID, arg.AgentID, arg.IssueID)
+	var i CloudRuntimeSession
+	err := row.Scan(
+		&i.ID,
+		&i.RuntimeID,
+		&i.AgentID,
+		&i.IssueID,
+		&i.ChatSessionID,
+		&i.LastSandboxID,
+		&i.LastSnapshotID,
+		&i.SnapshotCreatedAt,
+		&i.SnapshotExpiresAt,
+		&i.LastWorkdir,
+		&i.LastBranch,
+		&i.LastCodexSessionID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getCloudRuntimeSessionForChat = `-- name: GetCloudRuntimeSessionForChat :one
+SELECT id, runtime_id, agent_id, issue_id, chat_session_id, last_sandbox_id, last_snapshot_id, snapshot_created_at, snapshot_expires_at, last_workdir, last_branch, last_codex_session_id, created_at, updated_at FROM cloud_runtime_session
+WHERE runtime_id = $1
+  AND cloud_runtime_session.agent_id = $2
+  AND cloud_runtime_session.chat_session_id = $3
+`
+
+type GetCloudRuntimeSessionForChatParams struct {
+	RuntimeID     pgtype.UUID `json:"runtime_id"`
+	AgentID       pgtype.UUID `json:"agent_id"`
+	ChatSessionID pgtype.UUID `json:"chat_session_id"`
+}
+
+func (q *Queries) GetCloudRuntimeSessionForChat(ctx context.Context, arg GetCloudRuntimeSessionForChatParams) (CloudRuntimeSession, error) {
+	row := q.db.QueryRow(ctx, getCloudRuntimeSessionForChat, arg.RuntimeID, arg.AgentID, arg.ChatSessionID)
+	var i CloudRuntimeSession
+	err := row.Scan(
+		&i.ID,
+		&i.RuntimeID,
+		&i.AgentID,
+		&i.IssueID,
+		&i.ChatSessionID,
+		&i.LastSandboxID,
+		&i.LastSnapshotID,
+		&i.SnapshotCreatedAt,
+		&i.SnapshotExpiresAt,
+		&i.LastWorkdir,
+		&i.LastBranch,
+		&i.LastCodexSessionID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
 	)
 	return i, err
 }
 
 const listAgentRuntimes = `-- name: ListAgentRuntimes :many
-SELECT id, workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at, created_at, updated_at, owner_id, legacy_daemon_id FROM agent_runtime
+SELECT id, workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at, created_at, updated_at, owner_id, legacy_daemon_id, credential_id FROM agent_runtime
 WHERE workspace_id = $1
 ORDER BY created_at ASC
 `
@@ -266,6 +463,7 @@ func (q *Queries) ListAgentRuntimes(ctx context.Context, workspaceID pgtype.UUID
 			&i.UpdatedAt,
 			&i.OwnerID,
 			&i.LegacyDaemonID,
+			&i.CredentialID,
 		); err != nil {
 			return nil, err
 		}
@@ -278,7 +476,7 @@ func (q *Queries) ListAgentRuntimes(ctx context.Context, workspaceID pgtype.UUID
 }
 
 const listAgentRuntimesByOwner = `-- name: ListAgentRuntimesByOwner :many
-SELECT id, workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at, created_at, updated_at, owner_id, legacy_daemon_id FROM agent_runtime
+SELECT id, workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at, created_at, updated_at, owner_id, legacy_daemon_id, credential_id FROM agent_runtime
 WHERE workspace_id = $1 AND owner_id = $2
 ORDER BY created_at ASC
 `
@@ -312,6 +510,49 @@ func (q *Queries) ListAgentRuntimesByOwner(ctx context.Context, arg ListAgentRun
 			&i.UpdatedAt,
 			&i.OwnerID,
 			&i.LegacyDaemonID,
+			&i.CredentialID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listCloudRuntimeCredentials = `-- name: ListCloudRuntimeCredentials :many
+SELECT id, workspace_id, name, provider, encrypted_token, project_id, team_id, base_snapshot_id, region, status, last_tested_at, last_test_error, owner_id, created_at, updated_at FROM cloud_runtime_credential
+WHERE workspace_id = $1
+ORDER BY created_at DESC
+`
+
+func (q *Queries) ListCloudRuntimeCredentials(ctx context.Context, workspaceID pgtype.UUID) ([]CloudRuntimeCredential, error) {
+	rows, err := q.db.Query(ctx, listCloudRuntimeCredentials, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []CloudRuntimeCredential{}
+	for rows.Next() {
+		var i CloudRuntimeCredential
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.Name,
+			&i.Provider,
+			&i.EncryptedToken,
+			&i.ProjectID,
+			&i.TeamID,
+			&i.BaseSnapshotID,
+			&i.Region,
+			&i.Status,
+			&i.LastTestedAt,
+			&i.LastTestError,
+			&i.OwnerID,
+			&i.CreatedAt,
+			&i.UpdatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -433,7 +674,7 @@ const updateAgentRuntimeHeartbeat = `-- name: UpdateAgentRuntimeHeartbeat :one
 UPDATE agent_runtime
 SET status = 'online', last_seen_at = now(), updated_at = now()
 WHERE id = $1
-RETURNING id, workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at, created_at, updated_at, owner_id, legacy_daemon_id
+RETURNING id, workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at, created_at, updated_at, owner_id, legacy_daemon_id, credential_id
 `
 
 func (q *Queries) UpdateAgentRuntimeHeartbeat(ctx context.Context, id pgtype.UUID) (AgentRuntime, error) {
@@ -454,6 +695,70 @@ func (q *Queries) UpdateAgentRuntimeHeartbeat(ctx context.Context, id pgtype.UUI
 		&i.UpdatedAt,
 		&i.OwnerID,
 		&i.LegacyDaemonID,
+		&i.CredentialID,
+	)
+	return i, err
+}
+
+const updateCloudRuntimeCredential = `-- name: UpdateCloudRuntimeCredential :one
+UPDATE cloud_runtime_credential
+SET name = $1,
+    project_id = $2,
+    team_id = $3,
+    base_snapshot_id = $4,
+    region = $5,
+    status = $6,
+    last_tested_at = $7,
+    last_test_error = $8,
+    updated_at = now()
+WHERE id = $9
+  AND workspace_id = $10
+RETURNING id, workspace_id, name, provider, encrypted_token, project_id, team_id, base_snapshot_id, region, status, last_tested_at, last_test_error, owner_id, created_at, updated_at
+`
+
+type UpdateCloudRuntimeCredentialParams struct {
+	Name           string             `json:"name"`
+	ProjectID      string             `json:"project_id"`
+	TeamID         pgtype.Text        `json:"team_id"`
+	BaseSnapshotID pgtype.Text        `json:"base_snapshot_id"`
+	Region         string             `json:"region"`
+	Status         string             `json:"status"`
+	LastTestedAt   pgtype.Timestamptz `json:"last_tested_at"`
+	LastTestError  pgtype.Text        `json:"last_test_error"`
+	ID             pgtype.UUID        `json:"id"`
+	WorkspaceID    pgtype.UUID        `json:"workspace_id"`
+}
+
+func (q *Queries) UpdateCloudRuntimeCredential(ctx context.Context, arg UpdateCloudRuntimeCredentialParams) (CloudRuntimeCredential, error) {
+	row := q.db.QueryRow(ctx, updateCloudRuntimeCredential,
+		arg.Name,
+		arg.ProjectID,
+		arg.TeamID,
+		arg.BaseSnapshotID,
+		arg.Region,
+		arg.Status,
+		arg.LastTestedAt,
+		arg.LastTestError,
+		arg.ID,
+		arg.WorkspaceID,
+	)
+	var i CloudRuntimeCredential
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Name,
+		&i.Provider,
+		&i.EncryptedToken,
+		&i.ProjectID,
+		&i.TeamID,
+		&i.BaseSnapshotID,
+		&i.Region,
+		&i.Status,
+		&i.LastTestedAt,
+		&i.LastTestError,
+		&i.OwnerID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
 	)
 	return i, err
 }
@@ -481,7 +786,7 @@ DO UPDATE SET
     owner_id = COALESCE(EXCLUDED.owner_id, agent_runtime.owner_id),
     last_seen_at = now(),
     updated_at = now()
-RETURNING id, workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at, created_at, updated_at, owner_id, legacy_daemon_id
+RETURNING id, workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at, created_at, updated_at, owner_id, legacy_daemon_id, credential_id
 `
 
 type UpsertAgentRuntimeParams struct {
@@ -524,6 +829,125 @@ func (q *Queries) UpsertAgentRuntime(ctx context.Context, arg UpsertAgentRuntime
 		&i.UpdatedAt,
 		&i.OwnerID,
 		&i.LegacyDaemonID,
+		&i.CredentialID,
+	)
+	return i, err
+}
+
+const upsertCloudRuntimeSession = `-- name: UpsertCloudRuntimeSession :one
+WITH updated AS (
+    UPDATE cloud_runtime_session
+    SET last_sandbox_id = $1,
+        last_snapshot_id = $2,
+        snapshot_created_at = $3,
+        snapshot_expires_at = $4,
+        last_workdir = $5,
+        last_branch = $6,
+        last_codex_session_id = $7,
+        updated_at = now()
+    WHERE cloud_runtime_session.runtime_id = $8
+      AND cloud_runtime_session.agent_id = $9
+      AND (
+        (cloud_runtime_session.issue_id = $10 AND $10 IS NOT NULL)
+        OR (cloud_runtime_session.chat_session_id = $11 AND $11 IS NOT NULL)
+      )
+    RETURNING id, runtime_id, agent_id, issue_id, chat_session_id, last_sandbox_id, last_snapshot_id, snapshot_created_at, snapshot_expires_at, last_workdir, last_branch, last_codex_session_id, created_at, updated_at
+),
+inserted AS (
+    INSERT INTO cloud_runtime_session (
+        runtime_id,
+        agent_id,
+        issue_id,
+        chat_session_id,
+        last_sandbox_id,
+        last_snapshot_id,
+        snapshot_created_at,
+        snapshot_expires_at,
+        last_workdir,
+        last_branch,
+        last_codex_session_id
+    )
+    SELECT
+        $8,
+        $9,
+        $10,
+        $11,
+        $1,
+        $2,
+        $3,
+        $4,
+        $5,
+        $6,
+        $7
+    WHERE NOT EXISTS (SELECT 1 FROM updated)
+    RETURNING id, runtime_id, agent_id, issue_id, chat_session_id, last_sandbox_id, last_snapshot_id, snapshot_created_at, snapshot_expires_at, last_workdir, last_branch, last_codex_session_id, created_at, updated_at
+)
+SELECT id, runtime_id, agent_id, issue_id, chat_session_id, last_sandbox_id, last_snapshot_id, snapshot_created_at, snapshot_expires_at, last_workdir, last_branch, last_codex_session_id, created_at, updated_at FROM updated
+UNION ALL
+SELECT id, runtime_id, agent_id, issue_id, chat_session_id, last_sandbox_id, last_snapshot_id, snapshot_created_at, snapshot_expires_at, last_workdir, last_branch, last_codex_session_id, created_at, updated_at FROM inserted
+`
+
+type UpsertCloudRuntimeSessionParams struct {
+	LastSandboxID      pgtype.Text        `json:"last_sandbox_id"`
+	LastSnapshotID     pgtype.Text        `json:"last_snapshot_id"`
+	SnapshotCreatedAt  pgtype.Timestamptz `json:"snapshot_created_at"`
+	SnapshotExpiresAt  pgtype.Timestamptz `json:"snapshot_expires_at"`
+	LastWorkdir        pgtype.Text        `json:"last_workdir"`
+	LastBranch         pgtype.Text        `json:"last_branch"`
+	LastCodexSessionID pgtype.Text        `json:"last_codex_session_id"`
+	RuntimeID          pgtype.UUID        `json:"runtime_id"`
+	AgentID            pgtype.UUID        `json:"agent_id"`
+	IssueID            pgtype.UUID        `json:"issue_id"`
+	ChatSessionID      pgtype.UUID        `json:"chat_session_id"`
+}
+
+type UpsertCloudRuntimeSessionRow struct {
+	ID                 pgtype.UUID        `json:"id"`
+	RuntimeID          pgtype.UUID        `json:"runtime_id"`
+	AgentID            pgtype.UUID        `json:"agent_id"`
+	IssueID            pgtype.UUID        `json:"issue_id"`
+	ChatSessionID      pgtype.UUID        `json:"chat_session_id"`
+	LastSandboxID      pgtype.Text        `json:"last_sandbox_id"`
+	LastSnapshotID     pgtype.Text        `json:"last_snapshot_id"`
+	SnapshotCreatedAt  pgtype.Timestamptz `json:"snapshot_created_at"`
+	SnapshotExpiresAt  pgtype.Timestamptz `json:"snapshot_expires_at"`
+	LastWorkdir        pgtype.Text        `json:"last_workdir"`
+	LastBranch         pgtype.Text        `json:"last_branch"`
+	LastCodexSessionID pgtype.Text        `json:"last_codex_session_id"`
+	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
+}
+
+func (q *Queries) UpsertCloudRuntimeSession(ctx context.Context, arg UpsertCloudRuntimeSessionParams) (UpsertCloudRuntimeSessionRow, error) {
+	row := q.db.QueryRow(ctx, upsertCloudRuntimeSession,
+		arg.LastSandboxID,
+		arg.LastSnapshotID,
+		arg.SnapshotCreatedAt,
+		arg.SnapshotExpiresAt,
+		arg.LastWorkdir,
+		arg.LastBranch,
+		arg.LastCodexSessionID,
+		arg.RuntimeID,
+		arg.AgentID,
+		arg.IssueID,
+		arg.ChatSessionID,
+	)
+	var i UpsertCloudRuntimeSessionRow
+	err := row.Scan(
+		&i.ID,
+		&i.RuntimeID,
+		&i.AgentID,
+		&i.IssueID,
+		&i.ChatSessionID,
+		&i.LastSandboxID,
+		&i.LastSnapshotID,
+		&i.SnapshotCreatedAt,
+		&i.SnapshotExpiresAt,
+		&i.LastWorkdir,
+		&i.LastBranch,
+		&i.LastCodexSessionID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
 	)
 	return i, err
 }

@@ -17,6 +17,7 @@ import { useUpdatableRuntimeIds } from "@multica/core/runtimes/hooks";
 import { useWSEvent } from "@multica/core/realtime";
 import { RuntimeList } from "./runtime-list";
 import { RuntimeDetail } from "./runtime-detail";
+import { CloudCredentialsPanel } from "./cloud-credentials-panel";
 
 type RuntimeFilter = "mine" | "all";
 
@@ -93,6 +94,7 @@ export default function RuntimesPage({ topSlot }: RuntimesPageProps = {}) {
   return (
     <div className="flex flex-1 min-h-0 flex-col">
       {topSlot}
+      <CloudCredentialsPanel />
       <ResizablePanelGroup
         orientation="horizontal"
         className="flex-1 min-h-0"

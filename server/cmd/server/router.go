@@ -337,6 +337,21 @@ func NewRouter(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus) chi.Route
 				r.Get("/summary", h.GetWorkspaceUsageSummary)
 			})
 
+			// Cloud runtime credentials (Vercel)
+			r.Group(func(r chi.Router) {
+				r.Use(middleware.RequireWorkspaceRole(queries, "owner", "admin"))
+				r.Route("/api/cloud/credentials/vercel", func(r chi.Router) {
+					r.Get("/", h.ListVercelCloudRuntimeCredentials)
+					r.Post("/", h.CreateVercelCloudRuntimeCredential)
+					r.Route("/{id}", func(r chi.Router) {
+						r.Patch("/", h.UpdateVercelCloudRuntimeCredential)
+						r.Delete("/", h.DeleteVercelCloudRuntimeCredential)
+						r.Post("/test", h.TestVercelCloudRuntimeCredential)
+						r.Post("/bootstrap", h.BootstrapVercelCloudRuntimeCredential)
+					})
+				})
+			})
+
 			// Runtimes
 			r.Route("/api/runtimes", func(r chi.Router) {
 				r.Get("/", h.ListAgentRuntimes)

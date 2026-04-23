@@ -713,7 +713,9 @@ func TestDaemonRegister_MergesLegacyDaemonIDRuntime(t *testing.T) {
 	`, legacyAgentID, legacyIssueID, legacyRuntimeID).Scan(&legacyTaskID); err != nil {
 		t.Fatalf("seed legacy task: %v", err)
 	}
-	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE id = $1`, legacyTaskID) })
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE id = $1`, legacyTaskID)
+	})
 
 	// Register under the new stable UUID, declaring the prior hostname-derived
 	// id as legacy. The handler should merge the legacy row into the new one.
@@ -795,8 +797,8 @@ func TestDaemonRegister_MergesLegacyDaemonIDRuntime_ReverseDotLocal(t *testing.T
 	}
 
 	ctx := context.Background()
-	const legacyDaemonID = "ReverseDotLocalHost"                          // stored without .local
-	const emittedLegacyID = "ReverseDotLocalHost.local"                    // daemon now reports with .local
+	const legacyDaemonID = "ReverseDotLocalHost"        // stored without .local
+	const emittedLegacyID = "ReverseDotLocalHost.local" // daemon now reports with .local
 	const newDaemonID = "0192a7b0-0011-7ee9-9c21-30a5bcf86aa2"
 
 	var legacyRuntimeID string
@@ -853,8 +855,8 @@ func TestDaemonRegister_MergesLegacyDaemonIDRuntime_CaseDrift(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	const storedDaemonID = "Jiayuans-MacBook-Pro.local"     // DB has original mixed case
-	const emittedLegacyID = "jiayuans-macbook-pro.local"    // Daemon now reports lowercased
+	const storedDaemonID = "Jiayuans-MacBook-Pro.local"  // DB has original mixed case
+	const emittedLegacyID = "jiayuans-macbook-pro.local" // Daemon now reports lowercased
 	const newDaemonID = "0192a7b0-0022-7ee9-9c21-30a5bcf86aa3"
 
 	var legacyRuntimeID string
@@ -1220,5 +1222,178 @@ func TestClaimTask_AutopilotRunOnly_PopulatesWorkspaceID(t *testing.T) {
 	}
 	if resp.Task.WorkspaceID != testWorkspaceID {
 		t.Fatalf("expected workspace_id %q, got %q", testWorkspaceID, resp.Task.WorkspaceID)
+	}
+}
+
+func setupVercelClaimFixture(t *testing.T, runtimeMetadata map[string]any) (runtimeID, agentID, issueID, taskID, credentialID string, claimToken string) {
+	t.Helper()
+
+	ctx := context.Background()
+	unique := strings.ToLower(strings.ReplaceAll(t.Name(), "/", "_"))
+	claimToken = "claim-token-" + unique
+
+	if runtimeMetadata == nil {
+		runtimeMetadata = map[string]any{}
+	}
+	metadataBytes, err := json.Marshal(runtimeMetadata)
+	if err != nil {
+		t.Fatalf("marshal runtime metadata: %v", err)
+	}
+
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO cloud_runtime_credential (
+			workspace_id, name, provider, encrypted_token, project_id, team_id, base_snapshot_id, region, status, owner_id
+		)
+		VALUES ($1, $2, 'vercel_sandbox', $3, $4, $5, $6, $7, 'active', $8)
+		RETURNING id
+	`, testWorkspaceID, "Vercel Credential "+unique, claimToken, "project-"+unique, "team-"+unique, "snapshot-"+unique, "sfo1", testUserID).Scan(&credentialID); err != nil {
+		t.Fatalf("setup: create credential: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM cloud_runtime_credential WHERE id = $1`, credentialID)
+	})
+
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_runtime (
+			workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at, credential_id
+		)
+		VALUES ($1, NULL, $2, 'cloud', $3, 'online', $4, $5::jsonb, now(), $6)
+		RETURNING id
+	`, testWorkspaceID, "Vercel Runtime "+unique, "vercel_sandbox", "Claim runtime", metadataBytes, credentialID).Scan(&runtimeID); err != nil {
+		t.Fatalf("setup: create runtime: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_runtime WHERE id = $1`, runtimeID)
+	})
+
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent (
+			workspace_id, name, description, runtime_mode, runtime_config,
+			runtime_id, visibility, max_concurrent_tasks, owner_id
+		)
+		VALUES ($1, $2, '', 'cloud', '{}'::jsonb, $3, 'workspace', 1, $4)
+		RETURNING id
+	`, testWorkspaceID, "Vercel Claim Agent "+unique, runtimeID, testUserID).Scan(&agentID); err != nil {
+		t.Fatalf("setup: create agent: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent WHERE id = $1`, agentID)
+	})
+
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO issue (workspace_id, title, status, priority, creator_id, creator_type)
+		VALUES ($1, $2, 'todo', 'medium', $3, 'member')
+		RETURNING id
+	`, testWorkspaceID, "vercel-claim-issue-"+unique, testUserID).Scan(&issueID); err != nil {
+		t.Fatalf("setup: create issue: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM issue WHERE id = $1`, issueID)
+	})
+
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_task_queue (agent_id, issue_id, status, runtime_id)
+		VALUES ($1, $2, 'queued', $3)
+		RETURNING id
+	`, agentID, issueID, runtimeID).Scan(&taskID); err != nil {
+		t.Fatalf("setup: create task: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE id = $1`, taskID)
+	})
+
+	return runtimeID, agentID, issueID, taskID, credentialID, claimToken
+}
+
+func TestClaimTaskByRuntime_IncludesRuntimeMetadataAndCredentialToken(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	runtimeMetadata := map[string]any{
+		"runtime_key": "runtime_value",
+		"project_id":  "runtime-project",
+		"region":      "runtime-region",
+	}
+	runtimeID, _, _, _, _, claimToken := setupVercelClaimFixture(t, runtimeMetadata)
+
+	w := httptest.NewRecorder()
+	req := newDaemonTokenRequest("POST", "/api/daemon/runtimes/"+runtimeID+"/claim", nil, testWorkspaceID, "claim-daemon")
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("runtimeId", runtimeID)
+	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+
+	testHandler.ClaimTaskByRuntime(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("ClaimTaskByRuntime: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp struct {
+		Task struct {
+			WorkspaceID      string         `json:"workspace_id"`
+			RuntimeMetadata  map[string]any `json:"runtime_metadata"`
+			PriorSessionID   string         `json:"prior_session_id"`
+			PriorWorkDir     string         `json:"prior_work_dir"`
+			TriggerCommentID string         `json:"trigger_comment_id"`
+		} `json:"task"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Task.WorkspaceID != testWorkspaceID {
+		t.Fatalf("expected workspace_id %q, got %q", testWorkspaceID, resp.Task.WorkspaceID)
+	}
+	if resp.Task.RuntimeMetadata == nil {
+		t.Fatal("expected runtime_metadata in claim response")
+	}
+	if got := resp.Task.RuntimeMetadata["runtime_key"]; got != "runtime_value" {
+		t.Fatalf("runtime metadata lost base field: got %v", got)
+	}
+	if got := resp.Task.RuntimeMetadata["project_id"]; got != "project-"+strings.ToLower(strings.ReplaceAll(t.Name(), "/", "_")) {
+		t.Fatalf("runtime metadata project_id = %v, want credential project_id", got)
+	}
+	if got := resp.Task.RuntimeMetadata["region"]; got != "sfo1" {
+		t.Fatalf("runtime metadata region = %v, want credential region", got)
+	}
+	if got := resp.Task.RuntimeMetadata["base_snapshot_id"]; got != "snapshot-"+strings.ToLower(strings.ReplaceAll(t.Name(), "/", "_")) {
+		t.Fatalf("runtime metadata base_snapshot_id = %v, want credential snapshot", got)
+	}
+	if got := resp.Task.RuntimeMetadata["token"]; got != claimToken {
+		t.Fatalf("runtime metadata token = %v, want claim token", got)
+	}
+}
+
+func TestListPendingTasksByRuntime_DoesNotExposeRuntimeMetadataOrToken(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	runtimeID, _, _, _, _, claimToken := setupVercelClaimFixture(t, map[string]any{
+		"runtime_key": "runtime_value",
+	})
+
+	w := httptest.NewRecorder()
+	req := newDaemonTokenRequest("GET", "/api/daemon/runtimes/"+runtimeID+"/tasks", nil, testWorkspaceID, "claim-daemon")
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("runtimeId", runtimeID)
+	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+
+	testHandler.ListPendingTasksByRuntime(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("ListPendingTasksByRuntime: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if strings.Contains(w.Body.String(), claimToken) {
+		t.Fatalf("list response leaked token: %s", w.Body.String())
+	}
+
+	var resp []map[string]any
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(resp) != 1 {
+		t.Fatalf("expected one pending task, got %d", len(resp))
+	}
+	if _, ok := resp[0]["runtime_metadata"]; ok {
+		t.Fatalf("list response exposed runtime_metadata: %#v", resp[0])
 	}
 }

@@ -24,6 +24,11 @@ export type {
   RuntimeModelListRequest,
   RuntimeModelListStatus,
   RuntimeModelsResult,
+  CloudRuntimeCredential,
+  CreateVercelCloudRuntimeCredentialRequest,
+  UpdateVercelCloudRuntimeCredentialRequest,
+  CloudCredentialTestResult,
+  CloudCredentialBootstrapResult,
   IssueUsageSummary,
 } from "./agent";
 export type { Workspace, WorkspaceRepo, Member, MemberRole, User, MemberWithUser, Invitation } from "./workspace";

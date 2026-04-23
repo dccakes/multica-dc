@@ -1,4 +1,4 @@
-.PHONY: dev server daemon cli multica build test migrate-up migrate-down sqlc seed clean setup start stop check worktree-env setup-main start-main stop-main check-main setup-worktree start-worktree stop-worktree check-worktree db-up db-down selfhost selfhost-stop
+.PHONY: dev server daemon cloudrunner cli multica build test migrate-up migrate-down sqlc seed clean setup start stop check worktree-env setup-main start-main stop-main check-main setup-worktree start-worktree stop-worktree check-worktree db-up db-down selfhost selfhost-stop
 
 MAIN_ENV_FILE ?= .env
 WORKTREE_ENV_FILE ?= .env.worktree
@@ -185,6 +185,9 @@ server:
 daemon:
 	@$(MAKE) multica MULTICA_ARGS="daemon restart --profile local"
 
+cloudrunner:
+	cd server && go run ./cmd/cloudrunner
+
 cli:
 	@$(MAKE) multica MULTICA_ARGS="$(MULTICA_ARGS)"
 
@@ -197,6 +200,7 @@ DATE    ?= $(shell date -u '+%Y-%m-%dT%H:%M:%SZ')
 
 build:
 	cd server && go build -o bin/server ./cmd/server
+	cd server && go build -o bin/cloudrunner ./cmd/cloudrunner
 	cd server && go build -ldflags "-X main.version=$(VERSION) -X main.commit=$(COMMIT) -X main.date=$(DATE)" -o bin/multica ./cmd/multica
 	cd server && go build -o bin/migrate ./cmd/migrate
 

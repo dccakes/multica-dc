@@ -132,3 +132,123 @@ WHERE status = 'offline'
   AND last_seen_at < now() - make_interval(secs => @stale_seconds::double precision)
   AND id NOT IN (SELECT DISTINCT runtime_id FROM agent)
 RETURNING id, workspace_id;
+
+-- name: CreateCloudRuntimeCredential :one
+INSERT INTO cloud_runtime_credential (
+    workspace_id,
+    name,
+    provider,
+    encrypted_token,
+    project_id,
+    team_id,
+    base_snapshot_id,
+    region,
+    status,
+    owner_id
+) VALUES (
+    @workspace_id,
+    @name,
+    @provider,
+    @encrypted_token,
+    @project_id,
+    @team_id,
+    @base_snapshot_id,
+    @region,
+    @status,
+    @owner_id
+)
+RETURNING *;
+
+-- name: GetCloudRuntimeCredential :one
+SELECT * FROM cloud_runtime_credential
+WHERE id = @id
+  AND workspace_id = @workspace_id;
+
+-- name: ListCloudRuntimeCredentials :many
+SELECT * FROM cloud_runtime_credential
+WHERE workspace_id = $1
+ORDER BY created_at DESC;
+
+-- name: UpdateCloudRuntimeCredential :one
+UPDATE cloud_runtime_credential
+SET name = @name,
+    project_id = @project_id,
+    team_id = @team_id,
+    base_snapshot_id = @base_snapshot_id,
+    region = @region,
+    status = @status,
+    last_tested_at = @last_tested_at,
+    last_test_error = @last_test_error,
+    updated_at = now()
+WHERE id = @id
+  AND workspace_id = @workspace_id
+RETURNING *;
+
+-- name: DeleteCloudRuntimeCredential :exec
+DELETE FROM cloud_runtime_credential
+WHERE id = @id
+  AND workspace_id = @workspace_id;
+
+-- name: UpsertCloudRuntimeSession :one
+WITH updated AS (
+    UPDATE cloud_runtime_session
+    SET last_sandbox_id = @last_sandbox_id,
+        last_snapshot_id = @last_snapshot_id,
+        snapshot_created_at = @snapshot_created_at,
+        snapshot_expires_at = @snapshot_expires_at,
+        last_workdir = @last_workdir,
+        last_branch = @last_branch,
+        last_codex_session_id = @last_codex_session_id,
+        updated_at = now()
+    WHERE cloud_runtime_session.runtime_id = @runtime_id
+      AND cloud_runtime_session.agent_id = @agent_id
+      AND (
+        (cloud_runtime_session.issue_id = @issue_id AND @issue_id IS NOT NULL)
+        OR (cloud_runtime_session.chat_session_id = @chat_session_id AND @chat_session_id IS NOT NULL)
+      )
+    RETURNING *
+),
+inserted AS (
+    INSERT INTO cloud_runtime_session (
+        runtime_id,
+        agent_id,
+        issue_id,
+        chat_session_id,
+        last_sandbox_id,
+        last_snapshot_id,
+        snapshot_created_at,
+        snapshot_expires_at,
+        last_workdir,
+        last_branch,
+        last_codex_session_id
+    )
+    SELECT
+        @runtime_id,
+        @agent_id,
+        @issue_id,
+        @chat_session_id,
+        @last_sandbox_id,
+        @last_snapshot_id,
+        @snapshot_created_at,
+        @snapshot_expires_at,
+        @last_workdir,
+        @last_branch,
+        @last_codex_session_id
+    WHERE NOT EXISTS (SELECT 1 FROM updated)
+    RETURNING *
+)
+SELECT * FROM updated
+UNION ALL
+SELECT * FROM inserted;
+
+-- name: GetCloudRuntimeSessionForIssue :one
+SELECT * FROM cloud_runtime_session
+WHERE runtime_id = @runtime_id
+  AND cloud_runtime_session.agent_id = @agent_id
+  AND cloud_runtime_session.issue_id = @issue_id;
+
+-- name: GetCloudRuntimeSessionForChat :one
+SELECT * FROM cloud_runtime_session
+WHERE runtime_id = @runtime_id
+  AND cloud_runtime_session.agent_id = @agent_id
+  AND cloud_runtime_session.chat_session_id = @chat_session_id;

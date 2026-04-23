@@ -36,6 +36,11 @@ import type {
   RuntimePing,
   RuntimeUpdate,
   RuntimeModelListRequest,
+  CloudRuntimeCredential,
+  CreateVercelCloudRuntimeCredentialRequest,
+  UpdateVercelCloudRuntimeCredentialRequest,
+  CloudCredentialTestResult,
+  CloudCredentialBootstrapResult,
   TimelineEntry,
   AssigneeFrequencyEntry,
   TaskMessagePayload,
@@ -480,6 +485,42 @@ export class ApiClient {
     requestId: string,
   ): Promise<RuntimeModelListRequest> {
     return this.fetch(`/api/runtimes/${runtimeId}/models/${requestId}`);
+  }
+
+  // Cloud runtime credentials (Vercel)
+  async listVercelCloudRuntimeCredentials(): Promise<CloudRuntimeCredential[]> {
+    return this.fetch("/api/cloud/credentials/vercel");
+  }
+
+  async createVercelCloudRuntimeCredential(
+    data: CreateVercelCloudRuntimeCredentialRequest,
+  ): Promise<CloudRuntimeCredential> {
+    return this.fetch("/api/cloud/credentials/vercel", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async updateVercelCloudRuntimeCredential(
+    id: string,
+    data: UpdateVercelCloudRuntimeCredentialRequest,
+  ): Promise<CloudRuntimeCredential> {
+    return this.fetch(`/api/cloud/credentials/vercel/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async deleteVercelCloudRuntimeCredential(id: string): Promise<void> {
+    await this.fetch(`/api/cloud/credentials/vercel/${id}`, { method: "DELETE" });
+  }
+
+  async testVercelCloudRuntimeCredential(id: string): Promise<CloudCredentialTestResult> {
+    return this.fetch(`/api/cloud/credentials/vercel/${id}/test`, { method: "POST" });
+  }
+
+  async bootstrapVercelCloudRuntimeCredential(id: string): Promise<CloudCredentialBootstrapResult> {
+    return this.fetch(`/api/cloud/credentials/vercel/${id}/bootstrap`, { method: "POST" });
   }
 
   async listAgentTasks(agentId: string): Promise<AgentTask[]> {

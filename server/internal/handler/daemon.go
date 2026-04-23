@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -520,6 +521,56 @@ func logClaimEndpointSlow(runtimeID, outcome string, start time.Time, authMs, cl
 	)
 }
 
+func decodeJSONRuntimeMetadata(raw []byte) map[string]any {
+	if len(raw) == 0 {
+		return map[string]any{}
+	}
+
+	var decoded any
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		return map[string]any{}
+	}
+
+	metadata, ok := decoded.(map[string]any)
+	if !ok || metadata == nil {
+		return map[string]any{}
+	}
+	return metadata
+}
+
+func (h *Handler) claimRuntimeMetadata(ctx context.Context, runtime db.AgentRuntime) map[string]any {
+	metadata := decodeJSONRuntimeMetadata(runtime.Metadata)
+
+	if !runtime.CredentialID.Valid {
+		return metadata
+	}
+
+	cred, err := h.Queries.GetCloudRuntimeCredential(ctx, db.GetCloudRuntimeCredentialParams{
+		ID:          runtime.CredentialID,
+		WorkspaceID: runtime.WorkspaceID,
+	})
+	if err != nil || cred.Provider != vercelRuntimeCredentialProvider {
+		return metadata
+	}
+
+	metadata["credential_id"] = uuidToString(cred.ID)
+	metadata["project_id"] = cred.ProjectID
+	if cred.TeamID.Valid {
+		metadata["team_id"] = cred.TeamID.String
+	}
+	if cred.BaseSnapshotID.Valid {
+		metadata["base_snapshot_id"] = cred.BaseSnapshotID.String
+	}
+	if cred.Region != "" {
+		metadata["region"] = cred.Region
+	}
+	if cred.EncryptedToken != "" {
+		metadata["token"] = cred.EncryptedToken
+	}
+
+	return metadata
+}
+
 // ClaimTaskByRuntime atomically claims the next queued task for a runtime.
 // The response includes the agent's name and skills, fetched fresh from the DB.
 func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
@@ -527,9 +578,9 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 
 	var (
-		outcome                    = "unauth"
-		authMs, claimMs, buildMs   int64
-		buildStart                 time.Time
+		outcome                  = "unauth"
+		authMs, claimMs, buildMs int64
+		buildStart               time.Time
 	)
 	defer func() {
 		// Emit at function exit so error / unauth paths also carry timing.
@@ -542,7 +593,8 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	// Verify the caller owns this runtime's workspace.
-	if _, ok := h.requireDaemonRuntimeAccess(w, r, runtimeID); !ok {
+	rt, ok := h.requireDaemonRuntimeAccess(w, r, runtimeID)
+	if !ok {
 		return
 	}
 	authMs = time.Since(start).Milliseconds()
@@ -567,7 +619,7 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 	buildStart = time.Now()
 
 	// Build response with fresh agent data (name + skills + custom_env + custom_args).
-	resp := taskToResponse(*task)
+	resp := taskClaimToResponse(*task, h.claimRuntimeMetadata(r.Context(), rt))
 	if agent, err := h.Queries.GetAgent(r.Context(), task.AgentID); err == nil {
 		skills := h.TaskService.LoadAgentSkills(r.Context(), task.AgentID)
 		var customEnv map[string]string
@@ -777,10 +829,14 @@ func (h *Handler) ReportTaskProgress(w http.ResponseWriter, r *http.Request) {
 
 // CompleteTask marks a running task as completed.
 type TaskCompleteRequest struct {
-	PRURL     string `json:"pr_url"`
-	Output    string `json:"output"`
-	SessionID string `json:"session_id"` // Claude session ID for future resumption
-	WorkDir   string `json:"work_dir"`   // working directory used during execution
+	PRURL             string `json:"pr_url"`
+	Output            string `json:"output"`
+	BranchName        string `json:"branch_name,omitempty"`
+	SessionID         string `json:"session_id"` // Claude session ID for future resumption
+	WorkDir           string `json:"work_dir"`   // working directory used during execution
+	SnapshotID        string `json:"snapshot_id,omitempty"`
+	SandboxID         string `json:"sandbox_id,omitempty"`
+	SnapshotExpiresAt string `json:"snapshot_expires_at,omitempty"`
 }
 
 func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
@@ -806,6 +862,9 @@ func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	slog.Info("task completed", "task_id", taskID, "agent_id", uuidToString(task.AgentID))
+	if err := h.persistCloudRuntimeSession(r.Context(), *task, req.SnapshotID, req.SandboxID, req.BranchName, req.SessionID, req.WorkDir, req.SnapshotExpiresAt); err != nil {
+		slog.Warn("persist cloud runtime session on complete failed", "task_id", taskID, "error", err)
+	}
 	writeJSON(w, http.StatusOK, taskToResponse(*task))
 }
 
@@ -869,9 +928,13 @@ func (h *Handler) GetTaskStatus(w http.ResponseWriter, r *http.Request) {
 
 // FailTask marks a running task as failed.
 type TaskFailRequest struct {
-	Error     string `json:"error"`
-	SessionID string `json:"session_id,omitempty"`
-	WorkDir   string `json:"work_dir,omitempty"`
+	Error             string `json:"error"`
+	BranchName        string `json:"branch_name,omitempty"`
+	SessionID         string `json:"session_id,omitempty"`
+	WorkDir           string `json:"work_dir,omitempty"`
+	SnapshotID        string `json:"snapshot_id,omitempty"`
+	SandboxID         string `json:"sandbox_id,omitempty"`
+	SnapshotExpiresAt string `json:"snapshot_expires_at,omitempty"`
 }
 
 func (h *Handler) FailTask(w http.ResponseWriter, r *http.Request) {
@@ -896,7 +959,48 @@ func (h *Handler) FailTask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	slog.Info("task failed", "task_id", taskID, "agent_id", uuidToString(task.AgentID), "task_error", req.Error)
+	if err := h.persistCloudRuntimeSession(r.Context(), *task, req.SnapshotID, req.SandboxID, req.BranchName, req.SessionID, req.WorkDir, req.SnapshotExpiresAt); err != nil {
+		slog.Warn("persist cloud runtime session on fail failed", "task_id", taskID, "error", err)
+	}
 	writeJSON(w, http.StatusOK, taskToResponse(*task))
+}
+
+func (h *Handler) persistCloudRuntimeSession(ctx context.Context, task db.AgentTaskQueue, snapshotID, sandboxID, branchName, sessionID, workDir, snapshotExpiresAt string) error {
+	if !task.RuntimeID.Valid {
+		return nil
+	}
+	if !task.IssueID.Valid && !task.ChatSessionID.Valid {
+		return nil
+	}
+	if snapshotID == "" && sandboxID == "" && branchName == "" && sessionID == "" && workDir == "" {
+		return nil
+	}
+
+	var expires pgtype.Timestamptz
+	var created pgtype.Timestamptz
+	if snapshotExpiresAt != "" {
+		t, err := time.Parse(time.RFC3339, snapshotExpiresAt)
+		if err != nil {
+			return err
+		}
+		expires = pgtype.Timestamptz{Time: t, Valid: true}
+		created = pgtype.Timestamptz{Time: time.Now().UTC(), Valid: true}
+	}
+
+	_, err := h.Queries.UpsertCloudRuntimeSession(ctx, db.UpsertCloudRuntimeSessionParams{
+		RuntimeID:          task.RuntimeID,
+		AgentID:            task.AgentID,
+		IssueID:            task.IssueID,
+		ChatSessionID:      task.ChatSessionID,
+		LastSandboxID:      strToText(sandboxID),
+		LastSnapshotID:     strToText(snapshotID),
+		SnapshotCreatedAt:  created,
+		SnapshotExpiresAt:  expires,
+		LastWorkdir:        strToText(workDir),
+		LastBranch:         strToText(branchName),
+		LastCodexSessionID: strToText(sessionID),
+	})
+	return err
 }
 
 // ---------------------------------------------------------------------------
