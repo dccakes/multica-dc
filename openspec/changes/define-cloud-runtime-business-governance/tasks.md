@@ -33,7 +33,7 @@
 - [ ] 5.1 Add budget-block issue-thread comment behavior for out-of-budget transitions
 - [ ] 5.2 Expose admin controls for budget caps and concurrency limits in runtime management surfaces
 - [ ] 5.3 Expose blocked/paused/intervention statuses clearly in issue and runtime views
-- [ ] 5.4 Show permission-denied feedback for non-admin budget control attempts
+- [x] 5.4 Show permission-denied feedback for non-admin budget control attempts
 - [x] 5.5 Ensure configured and bootstrapped Vercel sandboxes appear in runtimes list as remote runtimes, including offline visibility
 
 ## 6. Metrics and Validation

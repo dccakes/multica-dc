@@ -11,6 +11,12 @@ import { Badge } from "@multica/ui/components/ui/badge";
 import { toast } from "sonner";
 
 const DEFAULT_REGION = "iad1";
+const ADMIN_PERMISSION_ERROR = "Workspace admin permissions required for this action";
+
+function isPermissionError(message: string): boolean {
+  const value = message.toLowerCase();
+  return value.includes("insufficient permissions") || value.includes("forbidden");
+}
 
 export function CloudCredentialsPanel() {
   const [items, setItems] = useState<CloudRuntimeCredential[]>([]);
@@ -71,7 +77,8 @@ export function CloudCredentialsPanel() {
       await load();
       toast.success("Vercel credential created");
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to create credential");
+      const message = e instanceof Error ? e.message : "Failed to create credential";
+      toast.error(isPermissionError(message) ? ADMIN_PERMISSION_ERROR : message);
     } finally {
       setSubmitting(false);
     }
@@ -98,7 +105,8 @@ export function CloudCredentialsPanel() {
       }
       await load();
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Action failed");
+      const message = e instanceof Error ? e.message : "Action failed";
+      toast.error(isPermissionError(message) ? ADMIN_PERMISSION_ERROR : message);
     } finally {
       setBusyId(null);
     }
