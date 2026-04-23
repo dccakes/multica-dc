@@ -38,7 +38,7 @@
 
 ## 6. Metrics and Validation
 
-- [ ] 6.1 Track billable spend (sandbox + model/token API) and non-billable local usage for productivity analytics
+- [x] 6.1 Track billable spend (sandbox + model/token API) and non-billable local usage for productivity analytics
 - [ ] 6.2 Support developer-provided effort estimate with agent auto-estimate fallback when missing
 - [ ] 6.3 Validate reliability success criteria across end-to-end chain (provision, setup, repo correctness, PR workflow, notification)
 - [ ] 6.4 Add tests for budget enforcement, permission gates, lifecycle transitions, checkpoint cadence, and resume fallback behavior

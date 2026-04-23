@@ -865,6 +865,7 @@ func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 	if err := h.persistCloudRuntimeSession(r.Context(), *task, req.SnapshotID, req.SandboxID, req.BranchName, req.SessionID, req.WorkDir, req.SnapshotExpiresAt); err != nil {
 		slog.Warn("persist cloud runtime session on complete failed", "task_id", taskID, "error", err)
 	}
+	h.recordTaskCostLedger(r.Context(), *task)
 	writeJSON(w, http.StatusOK, taskToResponse(*task))
 }
 
@@ -962,6 +963,7 @@ func (h *Handler) FailTask(w http.ResponseWriter, r *http.Request) {
 	if err := h.persistCloudRuntimeSession(r.Context(), *task, req.SnapshotID, req.SandboxID, req.BranchName, req.SessionID, req.WorkDir, req.SnapshotExpiresAt); err != nil {
 		slog.Warn("persist cloud runtime session on fail failed", "task_id", taskID, "error", err)
 	}
+	h.recordTaskCostLedger(r.Context(), *task)
 	writeJSON(w, http.StatusOK, taskToResponse(*task))
 }
 
