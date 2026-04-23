@@ -50,11 +50,22 @@ function getLaunchedBy(metadata: Record<string, unknown>): string | null {
   return null;
 }
 
+function getExecutionStateLabel(metadata: Record<string, unknown>): string | null {
+  const raw = metadata?.execution_state;
+  if (typeof raw !== "string") return null;
+
+  if (raw === "needs_human_intervention") return "needs intervention";
+  if (raw === "paused_budget_blocked") return "paused (budget)";
+  if (raw === "blocked_budget") return "blocked (budget)";
+  return null;
+}
+
 export function RuntimeDetail({ runtime }: { runtime: AgentRuntime }) {
   const cliVersion =
     runtime.runtime_mode === "local" ? getCliVersion(runtime.metadata) : null;
   const launchedBy =
     runtime.runtime_mode === "local" ? getLaunchedBy(runtime.metadata) : null;
+  const executionState = getExecutionStateLabel(runtime.metadata);
 
   const user = useAuthStore((s) => s.user);
   const wsId = useWorkspaceId();
@@ -103,6 +114,11 @@ export function RuntimeDetail({ runtime }: { runtime: AgentRuntime }) {
           </div>
         </div>
         <div className="flex items-center gap-2">
+          {executionState && (
+            <span className="rounded border border-border/60 bg-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+              {executionState}
+            </span>
+          )}
           <StatusBadge status={runtime.status} />
           {canDelete && (
             <Button
@@ -123,7 +139,10 @@ export function RuntimeDetail({ runtime }: { runtime: AgentRuntime }) {
         <div className="grid grid-cols-2 gap-4">
           <InfoField label="Runtime Mode" value={runtime.runtime_mode} />
           <InfoField label="Provider" value={runtime.provider} />
-          <InfoField label="Status" value={runtime.status} />
+          <InfoField
+            label="Status"
+            value={executionState ? `${runtime.status} (${executionState})` : runtime.status}
+          />
           <InfoField
             label="Last Seen"
             value={formatLastSeen(runtime.last_seen_at)}
