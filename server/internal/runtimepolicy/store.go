@@ -193,6 +193,39 @@ func (s *Store) GetWorkspaceCostTotal(ctx context.Context, workspaceID string, s
 	return total, sandbox, model, nil
 }
 
+func (s *Store) CountActiveBillableTasksByWorkspace(ctx context.Context, workspaceID string) (int64, error) {
+	row := s.db.QueryRow(ctx, `
+		SELECT count(*)
+		FROM agent_task_queue atq
+		JOIN agent_runtime rt ON rt.id = atq.runtime_id
+		WHERE atq.status IN ('dispatched', 'running')
+		  AND rt.workspace_id = $1
+		  AND lower(rt.runtime_mode) IN ('remote', 'cloud', 'vercel')
+	`, workspaceID)
+	var total int64
+	if err := row.Scan(&total); err != nil {
+		return 0, err
+	}
+	return total, nil
+}
+
+func (s *Store) CountActiveBillableTasksByBudgetParentIssue(ctx context.Context, budgetParentIssueID string) (int64, error) {
+	row := s.db.QueryRow(ctx, `
+		SELECT count(*)
+		FROM agent_task_queue atq
+		JOIN agent_runtime rt ON rt.id = atq.runtime_id
+		JOIN issue i ON i.id = atq.issue_id
+		WHERE atq.status IN ('dispatched', 'running')
+		  AND lower(rt.runtime_mode) IN ('remote', 'cloud', 'vercel')
+		  AND COALESCE(i.parent_issue_id, i.id) = $1::uuid
+	`, budgetParentIssueID)
+	var total int64
+	if err := row.Scan(&total); err != nil {
+		return 0, err
+	}
+	return total, nil
+}
+
 func scanWorkspacePolicy(row pgx.Row) (WorkspacePolicy, error) {
 	var policy WorkspacePolicy
 	if err := row.Scan(

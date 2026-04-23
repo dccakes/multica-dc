@@ -7,11 +7,11 @@
 
 ## 2. Budget Enforcement and Concurrency Controls
 
-- [ ] 2.1 Implement parent-issue budget accounting where sub-issues consume only against parent cap
-- [ ] 2.2 Implement monthly company budget accounting and block behavior for billable runtimes
-- [ ] 2.3 Implement runtime-type-aware enforcement (`vercel` billable, `local` non-billable exception)
-- [ ] 2.4 Implement admin-configurable global remote concurrency limit and optional per-parent limit
-- [ ] 2.5 Implement per-issue admin override lifecycle with auto-expiry on issue completion
+- [x] 2.1 Implement parent-issue budget accounting where sub-issues consume only against parent cap
+- [x] 2.2 Implement monthly company budget accounting and block behavior for billable runtimes
+- [x] 2.3 Implement runtime-type-aware enforcement (`vercel` billable, `local` non-billable exception)
+- [x] 2.4 Implement admin-configurable global remote concurrency limit and optional per-parent limit
+- [x] 2.5 Implement per-issue admin override lifecycle with auto-expiry on issue completion
 
 ## 3. Delegation, Ownership, and Lifecycle Transitions
 

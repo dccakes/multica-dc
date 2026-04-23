@@ -15,6 +15,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/mention"
 	"github.com/multica-ai/multica/server/internal/realtime"
+	"github.com/multica-ai/multica/server/internal/runtimepolicy"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -22,10 +23,11 @@ import (
 )
 
 type TaskService struct {
-	Queries   *db.Queries
-	TxStarter TxStarter
-	Hub       *realtime.Hub
-	Bus       *events.Bus
+	Queries     *db.Queries
+	TxStarter   TxStarter
+	Hub         *realtime.Hub
+	Bus         *events.Bus
+	PolicyStore *runtimepolicy.Store
 }
 
 func NewTaskService(q *db.Queries, tx TxStarter, hub *realtime.Hub, bus *events.Bus) *TaskService {
@@ -272,6 +274,23 @@ func (s *TaskService) ClaimTaskForRuntime(ctx context.Context, runtimeID pgtype.
 		return nil, fmt.Errorf("list pending tasks: %w", err)
 	}
 
+	runtime, err := s.Queries.GetAgentRuntime(ctx, runtimeID)
+	if err != nil {
+		outcome = "error_runtime"
+		return nil, fmt.Errorf("load runtime: %w", err)
+	}
+
+	billableRuntime := runtimepolicy.IsBillableRuntime(runtime.RuntimeMode)
+	policyStore := s.PolicyStore
+	var workspacePolicy runtimepolicy.WorkspacePolicy
+	if billableRuntime && policyStore != nil {
+		workspacePolicy, err = policyStore.GetWorkspacePolicy(ctx, util.UUIDToString(runtime.WorkspaceID))
+		if err != nil {
+			outcome = "error_workspace_policy"
+			return nil, fmt.Errorf("load workspace runtime policy: %w", err)
+		}
+	}
+
 	loopStart := time.Now()
 	triedAgents := map[string]struct{}{}
 	var claimed *db.AgentTaskQueue
@@ -282,6 +301,17 @@ func (s *TaskService) ClaimTaskForRuntime(ctx context.Context, runtimeID pgtype.
 		}
 		triedAgents[agentKey] = struct{}{}
 		tried++
+
+		if billableRuntime && policyStore != nil {
+			allowed, err := s.canClaimBillableTask(ctx, candidate, runtime, workspacePolicy, policyStore)
+			if err != nil {
+				outcome = "error_policy"
+				return nil, err
+			}
+			if !allowed {
+				continue
+			}
+		}
 
 		task, err := s.ClaimTask(ctx, candidate.AgentID)
 		if err != nil {
@@ -301,6 +331,71 @@ func (s *TaskService) ClaimTaskForRuntime(ctx context.Context, runtimeID pgtype.
 	}
 
 	return claimed, nil
+}
+
+func (s *TaskService) canClaimBillableTask(ctx context.Context, candidate db.AgentTaskQueue, runtime db.AgentRuntime, workspacePolicy runtimepolicy.WorkspacePolicy, policyStore *runtimepolicy.Store) (bool, error) {
+	if !runtimepolicy.IsBillableRuntime(runtime.RuntimeMode) {
+		return true, nil
+	}
+	if !candidate.IssueID.Valid {
+		return true, nil
+	}
+
+	issue, err := s.Queries.GetIssue(ctx, candidate.IssueID)
+	if err != nil {
+		return false, fmt.Errorf("load issue: %w", err)
+	}
+
+	parentIssueID := issue.ID
+	if issue.ParentIssueID.Valid {
+		parentIssueID = issue.ParentIssueID
+	}
+
+	issueBudget := workspacePolicy.DefaultParentIssueBudgetCents
+	if override, err := policyStore.GetIssueBudgetOverride(ctx, util.UUIDToString(parentIssueID)); err == nil {
+		issueBudget = override.BudgetCents
+	}
+
+	issueSpend, _, _, err := policyStore.GetIssueCostTotal(ctx, util.UUIDToString(parentIssueID))
+	if err != nil {
+		return false, fmt.Errorf("load issue spend: %w", err)
+	}
+	if runtimepolicy.ShouldPauseAtCheckpoint(runtimepolicy.ThresholdState(issueSpend, issueBudget), true) {
+		return false, nil
+	}
+
+	monthStart := time.Now().UTC()
+	monthStart = time.Date(monthStart.Year(), monthStart.Month(), 1, 0, 0, 0, 0, time.UTC)
+	monthlySpend, _, _, err := policyStore.GetWorkspaceCostTotal(ctx, util.UUIDToString(issue.WorkspaceID), monthStart)
+	if err != nil {
+		return false, fmt.Errorf("load workspace spend: %w", err)
+	}
+	if runtimepolicy.ShouldPauseAtCheckpoint(runtimepolicy.ThresholdState(monthlySpend, workspacePolicy.MonthlyBudgetCents), true) {
+		return false, nil
+	}
+
+	remoteActive, err := policyStore.CountActiveBillableTasksByWorkspace(ctx, util.UUIDToString(issue.WorkspaceID))
+	if err != nil {
+		return false, fmt.Errorf("count workspace active tasks: %w", err)
+	}
+	if workspacePolicy.RemoteConcurrencyLimit > 0 && remoteActive >= int64(workspacePolicy.RemoteConcurrencyLimit) {
+		return false, nil
+	}
+
+	parentActive, err := policyStore.CountActiveBillableTasksByBudgetParentIssue(ctx, util.UUIDToString(parentIssueID))
+	if err != nil {
+		return false, fmt.Errorf("count parent active tasks: %w", err)
+	}
+	limit := int64(1)
+	override, err := policyStore.GetIssueBudgetOverride(ctx, util.UUIDToString(parentIssueID))
+	if err == nil && override.RemoteConcurrencyLimit.Valid {
+		limit = int64(override.RemoteConcurrencyLimit.Int32)
+	}
+	if limit > 0 && parentActive >= limit {
+		return false, nil
+	}
+
+	return true, nil
 }
 
 // maybeLogClaimSlow emits one structured log per ClaimTask call when its total

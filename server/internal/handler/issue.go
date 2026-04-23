@@ -1179,6 +1179,10 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 		h.TaskService.CancelTasksForIssue(r.Context(), issue.ID)
 	}
 
+	if statusChanged && issue.Status == "done" {
+		h.clearIssueRuntimePolicyOverride(r.Context(), uuidToString(issue.ID))
+	}
+
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -1481,6 +1485,10 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 		// Cancel active tasks when the issue is cancelled by a user.
 		if statusChanged && issue.Status == "cancelled" {
 			h.TaskService.CancelTasksForIssue(r.Context(), issue.ID)
+		}
+
+		if statusChanged && issue.Status == "done" {
+			h.clearIssueRuntimePolicyOverride(r.Context(), uuidToString(issue.ID))
 		}
 
 		updated++

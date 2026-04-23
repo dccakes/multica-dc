@@ -15,6 +15,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/middleware"
 	"github.com/multica-ai/multica/server/internal/realtime"
+	"github.com/multica-ai/multica/server/internal/runtimepolicy"
 	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/storage"
 	"github.com/multica-ai/multica/server/internal/util"
@@ -61,6 +62,9 @@ func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *event
 	}
 
 	taskSvc := service.NewTaskService(queries, txStarter, hub, bus)
+	if executor != nil {
+		taskSvc.PolicyStore = runtimepolicy.NewStore(executor)
+	}
 	return &Handler{
 		Queries:          queries,
 		DB:               executor,
