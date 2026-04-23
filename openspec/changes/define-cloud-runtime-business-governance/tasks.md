@@ -16,7 +16,7 @@
 ## 3. Delegation, Ownership, and Lifecycle Transitions
 
 - [ ] 3.1 Enforce human canonical ownership invariant during agent delegation
-- [ ] 3.2 Ensure owner reassignment during active runs continues execution without forced pause
+- [x] 3.2 Ensure owner reassignment during active runs continues execution without forced pause
 - [ ] 3.3 Implement `needs_human_intervention` transitions for recoverable failures
 - [ ] 3.4 Implement intervention actions: resume from sandbox, resume from snapshot, handoff to local, archive, force close
 - [ ] 3.5 Enforce completion semantics by work type (code merged + owner completion, non-code owner approval/actioning)

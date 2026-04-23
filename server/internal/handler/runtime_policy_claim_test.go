@@ -2,6 +2,8 @@ package handler
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgtype"
@@ -319,5 +321,84 @@ func TestClaimTaskForRuntime_RespectsWorkspaceConcurrencyLimit(t *testing.T) {
 	}
 	if task != nil {
 		t.Fatalf("expected workspace concurrency cap to block queued task, got %#v", task)
+	}
+}
+
+func TestUpdateIssue_AllowsHumanReassignmentWhileTaskIsActive(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	var otherUserID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO "user" (name, email)
+		VALUES ('Reassignment Test User', 'reassignment-test@multica.ai')
+		RETURNING id
+	`).Scan(&otherUserID); err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM "user" WHERE id = $1`, otherUserID)
+	})
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO member (workspace_id, user_id, role)
+		VALUES ($1, $2, 'member')
+	`, testWorkspaceID, otherUserID); err != nil {
+		t.Fatalf("create member: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM member WHERE user_id = $1 AND workspace_id = $2`, otherUserID, testWorkspaceID)
+	})
+
+	var issueID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO issue (workspace_id, title, status, priority, assignee_type, assignee_id, creator_type, creator_id)
+		VALUES ($1, 'reassignment-active-run issue', 'todo', 'medium', 'member', $2, 'member', $2)
+		RETURNING id
+	`, testWorkspaceID, testUserID).Scan(&issueID); err != nil {
+		t.Fatalf("create issue: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM issue WHERE id = $1`, issueID)
+	})
+
+	runtimeID := handlerTestRuntimeID(t)
+	var agentID string
+	if err := testPool.QueryRow(ctx, `
+		SELECT id FROM agent WHERE runtime_id = $1 LIMIT 1
+	`, runtimeID).Scan(&agentID); err != nil {
+		t.Fatalf("load agent: %v", err)
+	}
+
+	var taskID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_task_queue (agent_id, issue_id, runtime_id, status, priority, started_at)
+		VALUES ($1, $2, $3, 'running', 0, now())
+		RETURNING id
+	`, agentID, issueID, runtimeID).Scan(&taskID); err != nil {
+		t.Fatalf("create running task: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE id = $1`, taskID)
+	})
+
+	w := httptest.NewRecorder()
+	req := newRequest(http.MethodPut, "/api/issues/"+issueID, map[string]any{
+		"assignee_type": "member",
+		"assignee_id":   otherUserID,
+	})
+	req = withURLParam(req, "id", issueID)
+	testHandler.UpdateIssue(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("UpdateIssue: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var status string
+	if err := testPool.QueryRow(ctx, `SELECT status FROM agent_task_queue WHERE id = $1`, taskID).Scan(&status); err != nil {
+		t.Fatalf("load task status: %v", err)
+	}
+	if status != "running" {
+		t.Fatalf("task status = %q, want running after human reassignment", status)
 	}
 }

@@ -1155,10 +1155,15 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 
 	// Reconcile task queue when assignee changes.
 	if assigneeChanged {
-		h.TaskService.CancelTasksForIssue(r.Context(), issue.ID)
-
-		if h.shouldEnqueueAgentTask(r.Context(), issue) {
-			h.TaskService.EnqueueTaskForIssue(r.Context(), issue)
+		if issue.AssigneeType.String == "agent" {
+			if hasActive, err := h.Queries.HasActiveTaskForIssue(r.Context(), issue.ID); err == nil && hasActive {
+				writeError(w, http.StatusConflict, "cannot reassign an active coding agent until it finishes")
+				return
+			}
+			h.TaskService.CancelTasksForIssue(r.Context(), issue.ID)
+			if h.shouldEnqueueAgentTask(r.Context(), issue) {
+				h.TaskService.EnqueueTaskForIssue(r.Context(), issue)
+			}
 		}
 	}
 
@@ -1468,9 +1473,14 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 		})
 
 		if assigneeChanged {
-			h.TaskService.CancelTasksForIssue(r.Context(), issue.ID)
-			if h.shouldEnqueueAgentTask(r.Context(), issue) {
-				h.TaskService.EnqueueTaskForIssue(r.Context(), issue)
+			if issue.AssigneeType.String == "agent" {
+				if hasActive, err := h.Queries.HasActiveTaskForIssue(r.Context(), issue.ID); err == nil && hasActive {
+					continue
+				}
+				h.TaskService.CancelTasksForIssue(r.Context(), issue.ID)
+				if h.shouldEnqueueAgentTask(r.Context(), issue) {
+					h.TaskService.EnqueueTaskForIssue(r.Context(), issue)
+				}
 			}
 		}
 
