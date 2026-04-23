@@ -303,12 +303,17 @@ func (s *TaskService) ClaimTaskForRuntime(ctx context.Context, runtimeID pgtype.
 		tried++
 
 		if billableRuntime && policyStore != nil {
-			allowed, err := s.canClaimBillableTask(ctx, candidate, runtime, workspacePolicy, policyStore)
+			allowed, blockReason, err := s.canClaimBillableTask(ctx, candidate, runtime, workspacePolicy, policyStore)
 			if err != nil {
 				outcome = "error_policy"
 				return nil, err
 			}
 			if !allowed {
+				if strings.Contains(blockReason, "budget") {
+					if commentErr := s.postBudgetBlockComment(ctx, candidate.IssueID, blockReason); commentErr != nil {
+						slog.Warn("budget block comment failed", "issue_id", util.UUIDToString(candidate.IssueID), "error", commentErr)
+					}
+				}
 				continue
 			}
 		}
@@ -333,17 +338,17 @@ func (s *TaskService) ClaimTaskForRuntime(ctx context.Context, runtimeID pgtype.
 	return claimed, nil
 }
 
-func (s *TaskService) canClaimBillableTask(ctx context.Context, candidate db.AgentTaskQueue, runtime db.AgentRuntime, workspacePolicy runtimepolicy.WorkspacePolicy, policyStore *runtimepolicy.Store) (bool, error) {
+func (s *TaskService) canClaimBillableTask(ctx context.Context, candidate db.AgentTaskQueue, runtime db.AgentRuntime, workspacePolicy runtimepolicy.WorkspacePolicy, policyStore *runtimepolicy.Store) (bool, string, error) {
 	if !runtimepolicy.IsBillableRuntime(runtime.RuntimeMode) {
-		return true, nil
+		return true, "", nil
 	}
 	if !candidate.IssueID.Valid {
-		return true, nil
+		return true, "", nil
 	}
 
 	issue, err := s.Queries.GetIssue(ctx, candidate.IssueID)
 	if err != nil {
-		return false, fmt.Errorf("load issue: %w", err)
+		return false, "", fmt.Errorf("load issue: %w", err)
 	}
 
 	parentIssueID := issue.ID
@@ -358,33 +363,33 @@ func (s *TaskService) canClaimBillableTask(ctx context.Context, candidate db.Age
 
 	issueSpend, _, _, err := policyStore.GetIssueCostTotal(ctx, util.UUIDToString(parentIssueID))
 	if err != nil {
-		return false, fmt.Errorf("load issue spend: %w", err)
+		return false, "", fmt.Errorf("load issue spend: %w", err)
 	}
 	if runtimepolicy.ShouldPauseAtCheckpoint(runtimepolicy.ThresholdState(issueSpend, issueBudget), true) {
-		return false, nil
+		return false, "budget block: parent issue budget exhausted", nil
 	}
 
 	monthStart := time.Now().UTC()
 	monthStart = time.Date(monthStart.Year(), monthStart.Month(), 1, 0, 0, 0, 0, time.UTC)
 	monthlySpend, _, _, err := policyStore.GetWorkspaceCostTotal(ctx, util.UUIDToString(issue.WorkspaceID), monthStart)
 	if err != nil {
-		return false, fmt.Errorf("load workspace spend: %w", err)
+		return false, "", fmt.Errorf("load workspace spend: %w", err)
 	}
 	if runtimepolicy.ShouldPauseAtCheckpoint(runtimepolicy.ThresholdState(monthlySpend, workspacePolicy.MonthlyBudgetCents), true) {
-		return false, nil
+		return false, "budget block: workspace monthly budget exhausted", nil
 	}
 
 	remoteActive, err := policyStore.CountActiveBillableTasksByWorkspace(ctx, util.UUIDToString(issue.WorkspaceID))
 	if err != nil {
-		return false, fmt.Errorf("count workspace active tasks: %w", err)
+		return false, "", fmt.Errorf("count workspace active tasks: %w", err)
 	}
 	if workspacePolicy.RemoteConcurrencyLimit > 0 && remoteActive >= int64(workspacePolicy.RemoteConcurrencyLimit) {
-		return false, nil
+		return false, "concurrency block: workspace remote limit reached", nil
 	}
 
 	parentActive, err := policyStore.CountActiveBillableTasksByBudgetParentIssue(ctx, util.UUIDToString(parentIssueID))
 	if err != nil {
-		return false, fmt.Errorf("count parent active tasks: %w", err)
+		return false, "", fmt.Errorf("count parent active tasks: %w", err)
 	}
 	limit := int64(1)
 	override, err := policyStore.GetIssueBudgetOverride(ctx, util.UUIDToString(parentIssueID))
@@ -392,10 +397,40 @@ func (s *TaskService) canClaimBillableTask(ctx context.Context, candidate db.Age
 		limit = int64(override.RemoteConcurrencyLimit.Int32)
 	}
 	if limit > 0 && parentActive >= limit {
-		return false, nil
+		return false, "concurrency block: parent issue limit reached", nil
 	}
 
-	return true, nil
+	return true, "", nil
+}
+
+func (s *TaskService) postBudgetBlockComment(ctx context.Context, issueID pgtype.UUID, reason string) error {
+	issue, err := s.Queries.GetIssue(ctx, issueID)
+	if err != nil {
+		return err
+	}
+
+	content := "Out of budget: " + reason + "."
+	comments, err := s.Queries.ListComments(ctx, db.ListCommentsParams{
+		IssueID:     issue.ID,
+		WorkspaceID: issue.WorkspaceID,
+	})
+	if err == nil {
+		for _, comment := range comments {
+			if comment.AuthorType == "system" && comment.Content == content {
+				return nil
+			}
+		}
+	}
+
+	_, err = s.Queries.CreateComment(ctx, db.CreateCommentParams{
+		IssueID:     issue.ID,
+		WorkspaceID: issue.WorkspaceID,
+		AuthorType:  "system",
+		AuthorID:    pgtype.UUID{},
+		Content:     content,
+		Type:        "system",
+	})
+	return err
 }
 
 // maybeLogClaimSlow emits one structured log per ClaimTask call when its total

@@ -6,6 +6,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/runtimepolicy"
+	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
 func createRuntimePolicyClaimTestRuntime(t *testing.T, runtimeMode, provider, name string) (string, string) {
@@ -199,6 +200,24 @@ func TestClaimTaskForRuntime_SkipsBillableWhenParentBudgetBlocked(t *testing.T) 
 	}
 	if task != nil {
 		t.Fatalf("expected billable task to be blocked, got %#v", task)
+	}
+
+	comments, err := testHandler.Queries.ListComments(context.Background(), db.ListCommentsParams{
+		IssueID:     parseUUID(childIssueID),
+		WorkspaceID: parseUUID(testWorkspaceID),
+	})
+	if err != nil {
+		t.Fatalf("ListComments: %v", err)
+	}
+	found := false
+	for _, comment := range comments {
+		if comment.AuthorType == "system" && comment.Content == "Out of budget: budget block: parent issue budget exhausted." {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected out-of-budget system comment on issue thread, got %#v", comments)
 	}
 }
 

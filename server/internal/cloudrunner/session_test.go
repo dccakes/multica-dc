@@ -261,3 +261,34 @@ func TestRecordSnapshot_RejectsIncompletePortableCheckpoint(t *testing.T) {
 		t.Fatalf("RecordSnapshot() should not upsert on invalid checkpoint, got %#v", store.lastUpsert)
 	}
 }
+
+func TestCanResumeFromSandbox_RequiresHealthyAndBudget(t *testing.T) {
+	t.Parallel()
+
+	if !CanResumeFromSandbox(true, true) {
+		t.Fatal("expected healthy sandbox with budget to be resumable")
+	}
+	if CanResumeFromSandbox(false, true) {
+		t.Fatal("expected unhealthy sandbox to be rejected")
+	}
+	if CanResumeFromSandbox(true, false) {
+		t.Fatal("expected budget block to reject sandbox resume")
+	}
+}
+
+func TestSelectResumeMode_FollowsFallbackOrder(t *testing.T) {
+	t.Parallel()
+
+	if got := SelectResumeMode(true, true, true, true); got != ResumeModeSandbox {
+		t.Fatalf("SelectResumeMode(sandbox allowed) = %q, want sandbox", got)
+	}
+	if got := SelectResumeMode(false, false, true, true); got != ResumeModeSnapshot {
+		t.Fatalf("SelectResumeMode(snapshot fallback) = %q, want snapshot", got)
+	}
+	if got := SelectResumeMode(false, false, false, true); got != ResumeModeLocal {
+		t.Fatalf("SelectResumeMode(local fallback) = %q, want local", got)
+	}
+	if got := SelectResumeMode(false, false, false, false); got != ResumeModeNone {
+		t.Fatalf("SelectResumeMode(no fallback) = %q, want none", got)
+	}
+}

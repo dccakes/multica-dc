@@ -30,7 +30,7 @@
 
 ## 5. UX and Communication Surfaces
 
-- [ ] 5.1 Add budget-block issue-thread comment behavior for out-of-budget transitions
+- [x] 5.1 Add budget-block issue-thread comment behavior for out-of-budget transitions
 - [ ] 5.2 Expose admin controls for budget caps and concurrency limits in runtime management surfaces
 - [x] 5.3 Expose blocked/paused/intervention statuses clearly in issue and runtime views
 - [x] 5.4 Show permission-denied feedback for non-admin budget control attempts
@@ -41,4 +41,4 @@
 - [x] 6.1 Track billable spend (sandbox + model/token API) and non-billable local usage for productivity analytics
 - [x] 6.2 Support developer-provided effort estimate with agent auto-estimate fallback when missing
 - [ ] 6.3 Validate reliability success criteria across end-to-end chain (provision, setup, repo correctness, PR workflow, notification)
-- [ ] 6.4 Add tests for budget enforcement, permission gates, lifecycle transitions, checkpoint cadence, and resume fallback behavior
+- [x] 6.4 Add tests for budget enforcement, permission gates, lifecycle transitions, checkpoint cadence, and resume fallback behavior

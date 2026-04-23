@@ -23,6 +23,15 @@ type SessionService struct {
 	now   func() time.Time
 }
 
+type ResumeMode string
+
+const (
+	ResumeModeSandbox  ResumeMode = "sandbox"
+	ResumeModeSnapshot ResumeMode = "snapshot"
+	ResumeModeLocal    ResumeMode = "local"
+	ResumeModeNone     ResumeMode = "none"
+)
+
 func NewSessionService(store SessionStore) *SessionService {
 	return &SessionService{
 		store: store,
@@ -188,6 +197,23 @@ func snapshotUsable(expiresAt pgtype.Timestamptz, now time.Time) bool {
 		return true
 	}
 	return expiresAt.Time.After(now)
+}
+
+func CanResumeFromSandbox(sandboxHealthy, budgetAllowed bool) bool {
+	return sandboxHealthy && budgetAllowed
+}
+
+func SelectResumeMode(sandboxHealthy, budgetAllowed, hasSnapshot, localHandoffAvailable bool) ResumeMode {
+	switch {
+	case CanResumeFromSandbox(sandboxHealthy, budgetAllowed):
+		return ResumeModeSandbox
+	case hasSnapshot:
+		return ResumeModeSnapshot
+	case localHandoffAvailable:
+		return ResumeModeLocal
+	default:
+		return ResumeModeNone
+	}
 }
 
 func parseUUIDOrZero(raw string) pgtype.UUID {
