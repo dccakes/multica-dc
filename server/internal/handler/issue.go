@@ -1262,6 +1262,13 @@ func (h *Handler) ApplyIssueIntervention(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	if req.Action == runtimepolicy.InterventionActionResumeSandbox || req.Action == runtimepolicy.InterventionActionResumeSnapshot || req.Action == runtimepolicy.InterventionActionHandoffLocal {
+		if !h.isAgentAssigneeReady(r.Context(), issue) {
+			writeError(w, http.StatusConflict, "issue is not assigned to an active agent")
+			return
+		}
+	}
+
 	if err := h.TaskService.CancelTasksForIssue(r.Context(), issue.ID); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to cancel active tasks")
 		return
@@ -1295,10 +1302,8 @@ func (h *Handler) ApplyIssueIntervention(w http.ResponseWriter, r *http.Request)
 	}
 
 	if req.Action == runtimepolicy.InterventionActionResumeSandbox || req.Action == runtimepolicy.InterventionActionResumeSnapshot || req.Action == runtimepolicy.InterventionActionHandoffLocal {
-		if h.isAgentAssigneeReady(r.Context(), updated) {
-			if _, err := h.TaskService.EnqueueTaskForIssueWithContext(r.Context(), updated, interventionTaskContext(req.Action)); err != nil {
-				slog.Warn("enqueue intervention task failed", append(logger.RequestAttrs(r), "error", err, "issue_id", id, "workspace_id", workspaceID)...)
-			}
+		if _, err := h.TaskService.EnqueueTaskForIssueWithContext(r.Context(), updated, interventionTaskContext(req.Action)); err != nil {
+			slog.Warn("enqueue intervention task failed", append(logger.RequestAttrs(r), "error", err, "issue_id", id, "workspace_id", workspaceID)...)
 		}
 	}
 

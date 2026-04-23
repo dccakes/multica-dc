@@ -164,6 +164,13 @@ func (r *Runner) claimLoop(ctx context.Context) {
 				}
 				selection, err := r.session.ResolveSnapshot(ctx, resolveInput)
 				if err != nil {
+					if preferredResumeMode != "" {
+						r.logger.Warn("snapshot continuity resolve failed", "task_id", task.ID, "error", err)
+						if reportErr := r.client.FailTask(ctx, task.ID, fmt.Sprintf("resume continuity failed: %v", err), "", ""); reportErr != nil {
+							r.logger.Warn("fail report failed", "task_id", task.ID, "error", reportErr)
+						}
+						continue
+					}
 					r.logger.Warn("snapshot continuity resolve failed", "task_id", task.ID, "error", err)
 				} else {
 					providerTask.ResumeSnapshotID = selection.SnapshotID

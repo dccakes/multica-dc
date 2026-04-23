@@ -122,6 +122,59 @@ func TestApplyIssueIntervention_ArchiveCancelsActiveTasks(t *testing.T) {
 	}
 }
 
+func TestApplyIssueIntervention_RejectsResumeWhenAgentInactive(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	agentID := createHandlerTestAgent(t, "Inactive Intervention Agent", nil)
+	if _, err := testPool.Exec(context.Background(), `
+		UPDATE agent
+		SET archived_at = now()
+		WHERE id = $1
+	`, agentID); err != nil {
+		t.Fatalf("archive agent: %v", err)
+	}
+
+	var issueID string
+	if err := testPool.QueryRow(context.Background(), `
+		INSERT INTO issue (workspace_id, title, status, priority, assignee_type, assignee_id, creator_type, creator_id)
+		VALUES ($1, 'inactive agent intervention issue', 'blocked', 'medium', 'agent', $2, 'member', $3)
+		RETURNING id
+	`, testWorkspaceID, agentID, testUserID).Scan(&issueID); err != nil {
+		t.Fatalf("create issue: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM issue WHERE id = $1`, issueID)
+	})
+
+	w := httptest.NewRecorder()
+	req := newRequest(http.MethodPost, "/api/issues/"+issueID+"/intervention", map[string]any{
+		"action": "resume_from_snapshot",
+	})
+	req = withURLParam(req, "id", issueID)
+	testHandler.ApplyIssueIntervention(w, req)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("ApplyIssueIntervention: expected 409, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var status string
+	if err := testPool.QueryRow(context.Background(), `SELECT status FROM issue WHERE id = $1`, issueID).Scan(&status); err != nil {
+		t.Fatalf("load issue status: %v", err)
+	}
+	if status != "blocked" {
+		t.Fatalf("issue status = %q, want blocked", status)
+	}
+
+	var taskCount int
+	if err := testPool.QueryRow(context.Background(), `SELECT count(*) FROM agent_task_queue WHERE issue_id = $1`, parseUUID(issueID)).Scan(&taskCount); err != nil {
+		t.Fatalf("load task count: %v", err)
+	}
+	if taskCount != 0 {
+		t.Fatalf("task count = %d, want 0", taskCount)
+	}
+}
+
 func TestApplyIssueIntervention_RejectsNonOwner(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")

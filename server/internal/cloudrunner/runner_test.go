@@ -27,6 +27,7 @@ type fakeLifecycleClient struct {
 	claimTasks     []*Task
 	heartbeatCh    chan string
 	claimCh        chan string
+	failCh         chan string
 }
 
 func (f *fakeLifecycleClient) SendHeartbeat(_ context.Context, runtimeID string) error {
@@ -96,8 +97,15 @@ func (f *fakeLifecycleClient) CompleteTask(_ context.Context, _, _, _, _, _ stri
 
 func (f *fakeLifecycleClient) FailTask(_ context.Context, _, _, _, _ string) error {
 	f.mu.Lock()
+	ch := f.failCh
 	defer f.mu.Unlock()
 	f.failCalls++
+	if ch != nil {
+		select {
+		case ch <- "fail":
+		default:
+		}
+	}
 	return nil
 }
 
@@ -183,11 +191,15 @@ func (f *fakeProvider) snapshot() (started, stopped bool, startCalls, stopCalls 
 type fakeSessionStoreForRunner struct {
 	mu          sync.Mutex
 	session     db.CloudRuntimeSession
+	getIssueErr error
 	upsertCount int
 	lastUpsert  db.UpsertCloudRuntimeSessionParams
 }
 
 func (f *fakeSessionStoreForRunner) GetCloudRuntimeSessionForIssue(context.Context, db.GetCloudRuntimeSessionForIssueParams) (db.CloudRuntimeSession, error) {
+	if f.getIssueErr != nil {
+		return db.CloudRuntimeSession{}, f.getIssueErr
+	}
 	return f.session, nil
 }
 
@@ -472,6 +484,50 @@ func TestRunnerClaimLoop_RespectsResumeSandboxInterventionContext(t *testing.T) 
 	}
 	if got.ResumeSource != "sandbox" {
 		t.Fatalf("ResumeSource = %q, want sandbox", got.ResumeSource)
+	}
+}
+
+func TestRunnerClaimLoop_FailsPreferredInterventionWhenSnapshotResolveErrors(t *testing.T) {
+	client := &fakeLifecycleClient{
+		claimTasks: []*Task{{
+			ID:        "task-1",
+			RuntimeID: "11111111-1111-1111-1111-111111111111",
+			AgentID:   "22222222-2222-2222-2222-222222222222",
+			IssueID:   "33333333-3333-3333-3333-333333333333",
+			Context:   []byte(`{"intervention_action":"resume_from_snapshot"}`),
+		}},
+		failCh: make(chan string, 1),
+	}
+	p := &fakeProvider{handledCh: make(chan struct{}, 1)}
+	session := NewSessionService(&fakeSessionStoreForRunner{
+		getIssueErr: errors.New("db failed"),
+	})
+
+	runner := NewRunner(Config{
+		RuntimeIDs:        []string{"rt-1"},
+		AuthToken:         "token",
+		HeartbeatInterval: time.Hour,
+		ClaimInterval:     5 * time.Millisecond,
+	}, client, p).WithSessionService(session)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go runner.claimLoop(ctx)
+
+	select {
+	case <-client.failCh:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timed out waiting for fail task")
+	}
+	cancel()
+
+	_, _, _, _, handled := p.snapshot()
+	if len(handled) != 0 {
+		t.Fatalf("provider should not execute when preferred recovery resolution fails: %#v", handled)
+	}
+	_, _, failCalls := client.lifecycleSnapshot()
+	if failCalls == 0 {
+		t.Fatal("expected fail task call")
 	}
 }
 

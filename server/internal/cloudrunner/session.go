@@ -77,9 +77,12 @@ func (s *SessionService) ResolveSnapshot(ctx context.Context, in ResolveSnapshot
 			} else if ok {
 				return selection, nil
 			}
-			return ResumeSelection{}, fmt.Errorf("snapshot resume requested but no usable snapshot is available")
 		case ResumeModeLocal:
-			return ResumeSelection{Source: string(ResumeModeLocal)}, nil
+			if selection, ok, err := s.loadPreferredSelection(ctx, in, false, string(ResumeModeLocal)); err != nil {
+				return ResumeSelection{}, err
+			} else if ok {
+				return selection, nil
+			}
 		default:
 			return ResumeSelection{}, fmt.Errorf("unsupported preferred resume mode %q", in.PreferredResumeMode)
 		}
@@ -95,6 +98,9 @@ func (s *SessionService) ResolveSnapshot(ctx context.Context, in ResolveSnapshot
 			if selection, ok := resumeSelectionFromSession(session, s.now()); ok {
 				return selection, nil
 			}
+			if selection, ok := preferredSelectionFromSession(session, s.now(), false, string(ResumeModeLocal)); ok {
+				return selection, nil
+			}
 		} else if !errors.Is(err, pgx.ErrNoRows) {
 			return ResumeSelection{}, err
 		}
@@ -107,6 +113,9 @@ func (s *SessionService) ResolveSnapshot(ctx context.Context, in ResolveSnapshot
 		})
 		if err == nil {
 			if selection, ok := resumeSelectionFromSession(session, s.now()); ok {
+				return selection, nil
+			}
+			if selection, ok := preferredSelectionFromSession(session, s.now(), false, string(ResumeModeLocal)); ok {
 				return selection, nil
 			}
 		} else if !errors.Is(err, pgx.ErrNoRows) {

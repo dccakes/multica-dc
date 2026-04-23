@@ -202,6 +202,42 @@ func TestResolveSnapshot_UsesChatResumeSnapshotWhenUnexpired(t *testing.T) {
 	}
 }
 
+func TestResolveSnapshot_FallsBackToPortableResumeWhenPreferredSnapshotExpired(t *testing.T) {
+	store := &fakeSessionStore{
+		getIssueFn: func(_ context.Context, _ db.GetCloudRuntimeSessionForIssueParams) (db.CloudRuntimeSession, error) {
+			return db.CloudRuntimeSession{
+				LastSnapshotID:    pgtype.Text{String: "snap_old", Valid: true},
+				SnapshotExpiresAt: pgtype.Timestamptz{Time: time.Now().UTC().Add(-1 * time.Minute), Valid: true},
+				LastWorkdir:       pgtype.Text{String: "/workspace", Valid: true},
+				LastBranch:        pgtype.Text{String: "feature/a", Valid: true},
+				LastCodexSessionID: pgtype.Text{
+					String: "codex_123",
+					Valid:  true,
+				},
+			}, nil
+		},
+	}
+	svc := NewSessionService(store)
+	now := time.Now().UTC()
+	svc.now = func() time.Time { return now }
+
+	selection, err := svc.ResolveSnapshot(context.Background(), ResolveSnapshotInput{
+		RuntimeID:           "11111111-1111-1111-1111-111111111111",
+		AgentID:             "22222222-2222-2222-2222-222222222222",
+		IssueID:             "33333333-3333-3333-3333-333333333333",
+		PreferredResumeMode: ResumeModeSnapshot,
+	})
+	if err != nil {
+		t.Fatalf("ResolveSnapshot() error = %v", err)
+	}
+	if selection.Source != "local" || selection.SnapshotID != "" {
+		t.Fatalf("selection = %#v, want portable local fallback", selection)
+	}
+	if selection.LastWorkdir != "/workspace" || selection.LastBranch != "feature/a" || selection.CodexSessionID != "codex_123" {
+		t.Fatalf("selection = %#v, want portable session fields preserved", selection)
+	}
+}
+
 func TestRecordSnapshot_UpsertsSession(t *testing.T) {
 	store := &fakeSessionStore{}
 	svc := NewSessionService(store)
