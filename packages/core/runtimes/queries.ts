@@ -5,6 +5,10 @@ export const runtimeKeys = {
   all: (wsId: string) => ["runtimes", wsId] as const,
   list: (wsId: string) => [...runtimeKeys.all(wsId), "list"] as const,
   listMine: (wsId: string) => [...runtimeKeys.all(wsId), "list", "mine"] as const,
+  policy: (wsId: string) => [...runtimeKeys.all(wsId), "policy"] as const,
+  workspacePolicy: (wsId: string) => [...runtimeKeys.policy(wsId), "workspace"] as const,
+  issuePolicy: (wsId: string, issueId: string) =>
+    [...runtimeKeys.policy(wsId), "issue", issueId] as const,
   latestVersion: () => ["runtimes", "latestVersion"] as const,
 };
 
@@ -12,6 +16,20 @@ export function runtimeListOptions(wsId: string, owner?: "me") {
   return queryOptions({
     queryKey: owner === "me" ? runtimeKeys.listMine(wsId) : runtimeKeys.list(wsId),
     queryFn: () => api.listRuntimes({ workspace_id: wsId, owner }),
+  });
+}
+
+export function workspaceRuntimePolicyOptions(wsId: string) {
+  return queryOptions({
+    queryKey: runtimeKeys.workspacePolicy(wsId),
+    queryFn: () => api.getWorkspaceRuntimePolicy(wsId),
+  });
+}
+
+export function issueRuntimePolicyOptions(wsId: string, issueId: string) {
+  return queryOptions({
+    queryKey: runtimeKeys.issuePolicy(wsId, issueId),
+    queryFn: () => api.getIssueRuntimePolicy(issueId),
   });
 }
 

@@ -8,6 +8,10 @@ import type {
   UpdateMeRequest,
   CreateMemberRequest,
   UpdateMemberRequest,
+  WorkspaceRuntimePolicyResponse,
+  UpdateWorkspaceRuntimePolicyRequest,
+  IssueRuntimePolicyResponse,
+  UpdateIssueRuntimePolicyRequest,
   ListIssuesParams,
   Agent,
   CreateAgentRequest,
@@ -485,6 +489,34 @@ export class ApiClient {
     requestId: string,
   ): Promise<RuntimeModelListRequest> {
     return this.fetch(`/api/runtimes/${runtimeId}/models/${requestId}`);
+  }
+
+  async getWorkspaceRuntimePolicy(workspaceId: string): Promise<WorkspaceRuntimePolicyResponse> {
+    return this.fetch(`/api/workspaces/${workspaceId}/runtime-policy`);
+  }
+
+  async updateWorkspaceRuntimePolicy(
+    workspaceId: string,
+    data: UpdateWorkspaceRuntimePolicyRequest,
+  ): Promise<WorkspaceRuntimePolicyResponse> {
+    return this.fetch(`/api/workspaces/${workspaceId}/runtime-policy`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async getIssueRuntimePolicy(issueId: string): Promise<IssueRuntimePolicyResponse> {
+    return this.fetch(`/api/issues/${issueId}/runtime-policy`);
+  }
+
+  async updateIssueRuntimePolicy(
+    issueId: string,
+    data: UpdateIssueRuntimePolicyRequest,
+  ): Promise<IssueRuntimePolicyResponse> {
+    return this.fetch(`/api/issues/${issueId}/runtime-policy`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    });
   }
 
   // Cloud runtime credentials (Vercel)

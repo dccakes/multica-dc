@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import { Trash2 } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Loader2, Trash2, Save } from "lucide-react";
 import { toast } from "sonner";
 import { useQuery } from "@tanstack/react-query";
 import type { AgentRuntime } from "@multica/core/types";
@@ -9,7 +9,14 @@ import { useAuthStore } from "@multica/core/auth";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { memberListOptions } from "@multica/core/workspace/queries";
 import { useDeleteRuntime } from "@multica/core/runtimes/mutations";
+import {
+  workspaceRuntimePolicyOptions,
+} from "@multica/core/runtimes/queries";
+import { useUpdateWorkspaceRuntimePolicy } from "@multica/core/runtimes/mutations";
 import { Button } from "@multica/ui/components/ui/button";
+import { Card, CardContent } from "@multica/ui/components/ui/card";
+import { Input } from "@multica/ui/components/ui/input";
+import { Label } from "@multica/ui/components/ui/label";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -60,6 +67,11 @@ function getExecutionStateLabel(metadata: Record<string, unknown>): string | nul
   return null;
 }
 
+function formatPolicyValue(value: number | null | undefined): string {
+  if (value === null || value === undefined) return "—";
+  return String(value);
+}
+
 export function RuntimeDetail({ runtime }: { runtime: AgentRuntime }) {
   const cliVersion =
     runtime.runtime_mode === "local" ? getCliVersion(runtime.metadata) : null;
@@ -73,6 +85,9 @@ export function RuntimeDetail({ runtime }: { runtime: AgentRuntime }) {
   const deleteMutation = useDeleteRuntime(wsId);
 
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const [monthlyBudgetCents, setMonthlyBudgetCents] = useState("");
+  const [remoteConcurrencyLimit, setRemoteConcurrencyLimit] = useState("");
+  const [defaultParentIssueBudgetCents, setDefaultParentIssueBudgetCents] = useState("");
 
   // Resolve owner info
   const ownerMember = runtime.owner_id
@@ -88,6 +103,20 @@ export function RuntimeDetail({ runtime }: { runtime: AgentRuntime }) {
     : false;
   const isRuntimeOwner = user && runtime.owner_id === user.id;
   const canDelete = isAdmin || isRuntimeOwner;
+  const { data: workspacePolicy } = useQuery({
+    ...workspaceRuntimePolicyOptions(wsId),
+    enabled: Boolean(wsId && isAdmin),
+  });
+  const policyMutation = useUpdateWorkspaceRuntimePolicy(wsId);
+
+  useEffect(() => {
+    if (!workspacePolicy) return;
+    setMonthlyBudgetCents(formatPolicyValue(workspacePolicy.monthly_budget_cents));
+    setRemoteConcurrencyLimit(formatPolicyValue(workspacePolicy.remote_concurrency_limit));
+    setDefaultParentIssueBudgetCents(
+      formatPolicyValue(workspacePolicy.default_parent_issue_budget_cents),
+    );
+  }, [workspacePolicy]);
 
   const handleDelete = () => {
     deleteMutation.mutate(runtime.id, {
@@ -99,6 +128,37 @@ export function RuntimeDetail({ runtime }: { runtime: AgentRuntime }) {
         toast.error(e instanceof Error ? e.message : "Failed to delete runtime");
       },
     });
+  };
+
+  const handleSavePolicy = async () => {
+    if (!isAdmin) return;
+
+    const monthly = Number(monthlyBudgetCents);
+    const remoteConcurrency = Number(remoteConcurrencyLimit);
+    const parentBudget = Number(defaultParentIssueBudgetCents);
+    if (!Number.isFinite(monthly) || monthly < 0) {
+      toast.error("Monthly budget must be a non-negative integer");
+      return;
+    }
+    if (!Number.isFinite(remoteConcurrency) || remoteConcurrency < 1) {
+      toast.error("Remote concurrency limit must be at least 1");
+      return;
+    }
+    if (!Number.isFinite(parentBudget) || parentBudget < 0) {
+      toast.error("Default parent issue budget must be a non-negative integer");
+      return;
+    }
+
+    try {
+      await policyMutation.mutateAsync({
+        monthly_budget_cents: monthly,
+        remote_concurrency_limit: remoteConcurrency,
+        default_parent_issue_budget_cents: parentBudget,
+      });
+      toast.success("Runtime policy saved");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to save runtime policy");
+    }
   };
 
   return (
@@ -198,6 +258,86 @@ export function RuntimeDetail({ runtime }: { runtime: AgentRuntime }) {
           </h3>
           <UsageSection runtimeId={runtime.id} />
         </div>
+
+        {isAdmin ? (
+          <div>
+            <h3 className="text-xs font-medium text-muted-foreground mb-3">
+              Workspace Runtime Policy
+            </h3>
+            <Card>
+              <CardContent className="space-y-4 pt-6">
+                {workspacePolicy ? (
+                  <div className="grid gap-4 md:grid-cols-3">
+                    <div>
+                      <Label htmlFor="monthly-budget-cents" className="text-xs text-muted-foreground">
+                        Monthly Budget (cents)
+                      </Label>
+                      <Input
+                        id="monthly-budget-cents"
+                        type="number"
+                        min={0}
+                        value={monthlyBudgetCents}
+                        onChange={(e) => setMonthlyBudgetCents(e.target.value)}
+                        className="mt-1"
+                      />
+                    </div>
+                    <div>
+                      <Label htmlFor="remote-concurrency-limit" className="text-xs text-muted-foreground">
+                        Remote Concurrency Limit
+                      </Label>
+                      <Input
+                        id="remote-concurrency-limit"
+                        type="number"
+                        min={1}
+                        value={remoteConcurrencyLimit}
+                        onChange={(e) => setRemoteConcurrencyLimit(e.target.value)}
+                        className="mt-1"
+                      />
+                    </div>
+                    <div>
+                      <Label htmlFor="parent-budget-cents" className="text-xs text-muted-foreground">
+                        Default Parent Issue Budget (cents)
+                      </Label>
+                      <Input
+                        id="parent-budget-cents"
+                        type="number"
+                        min={0}
+                        value={defaultParentIssueBudgetCents}
+                        onChange={(e) => setDefaultParentIssueBudgetCents(e.target.value)}
+                        className="mt-1"
+                      />
+                    </div>
+                  </div>
+                ) : (
+                  <div className="text-xs text-muted-foreground">Loading runtime policy...</div>
+                )}
+                <div className="flex items-center gap-2">
+                  <Button
+                    onClick={() => void handleSavePolicy()}
+                    disabled={!workspacePolicy || policyMutation.isPending}
+                    size="sm"
+                  >
+                    {policyMutation.isPending ? (
+                      <>
+                        <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
+                        Saving...
+                      </>
+                    ) : (
+                      <>
+                        <Save className="mr-2 h-3.5 w-3.5" />
+                        Save Policy
+                      </>
+                    )}
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+        ) : (
+          <div className="rounded-lg border bg-muted/20 px-4 py-3 text-xs text-muted-foreground">
+            Workspace runtime policy is managed by admins.
+          </div>
+        )}
 
         {/* Metadata */}
         {runtime.metadata && Object.keys(runtime.metadata).length > 0 && (

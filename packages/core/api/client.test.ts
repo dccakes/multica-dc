@@ -106,4 +106,63 @@ describe("ApiClient", () => {
       { url: "https://api.example.test/api/autopilots/ap-1/triggers/tr-1", method: "DELETE" },
     ]);
   });
+
+  it("uses the expected HTTP contract for runtime policy endpoints", async () => {
+    const fetchMock = vi.fn().mockImplementation(() =>
+      Promise.resolve(
+        new Response(JSON.stringify({
+          workspace_id: "ws-1",
+          monthly_budget_cents: 1000,
+          remote_concurrency_limit: 2,
+          default_parent_issue_budget_cents: 500,
+        }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = new ApiClient("https://api.example.test");
+
+    await client.getWorkspaceRuntimePolicy("ws-1");
+    await client.updateWorkspaceRuntimePolicy("ws-1", {
+      monthly_budget_cents: 2500,
+      remote_concurrency_limit: 3,
+      default_parent_issue_budget_cents: 750,
+    });
+    await client.getIssueRuntimePolicy("issue-1");
+    await client.updateIssueRuntimePolicy("issue-1", {
+      budget_cents: 900,
+      remote_concurrency_limit: 1,
+    });
+
+    const calls = fetchMock.mock.calls.map(([url, init]) => ({
+      url,
+      method: init?.method ?? "GET",
+      body: init?.body,
+    }));
+
+    expect(calls).toMatchObject([
+      { url: "https://api.example.test/api/workspaces/ws-1/runtime-policy", method: "GET" },
+      {
+        url: "https://api.example.test/api/workspaces/ws-1/runtime-policy",
+        method: "PATCH",
+        body: JSON.stringify({
+          monthly_budget_cents: 2500,
+          remote_concurrency_limit: 3,
+          default_parent_issue_budget_cents: 750,
+        }),
+      },
+      { url: "https://api.example.test/api/issues/issue-1/runtime-policy", method: "GET" },
+      {
+        url: "https://api.example.test/api/issues/issue-1/runtime-policy",
+        method: "PATCH",
+        body: JSON.stringify({
+          budget_cents: 900,
+          remote_concurrency_limit: 1,
+        }),
+      },
+    ]);
+  });
 });

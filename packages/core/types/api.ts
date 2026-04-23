@@ -84,6 +84,36 @@ export interface UpdateMemberRequest {
   role: MemberRole;
 }
 
+export interface WorkspaceRuntimePolicyResponse {
+  workspace_id: string;
+  monthly_budget_cents: number;
+  remote_concurrency_limit: number;
+  default_parent_issue_budget_cents: number;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface UpdateWorkspaceRuntimePolicyRequest {
+  monthly_budget_cents?: number;
+  remote_concurrency_limit?: number;
+  default_parent_issue_budget_cents?: number;
+}
+
+export interface IssueRuntimePolicyResponse {
+  issue_id: string;
+  budget_cents: number;
+  remote_concurrency_limit: number;
+  has_override: boolean;
+  updated_by?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface UpdateIssueRuntimePolicyRequest {
+  budget_cents?: number;
+  remote_concurrency_limit?: number;
+}
+
 // Personal Access Tokens
 export interface PersonalAccessToken {
   id: string;
