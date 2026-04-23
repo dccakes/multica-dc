@@ -178,7 +178,7 @@ func broadcastFailedTasks(ctx context.Context, queries *db.Queries, bus *events.
 		if issue, err := queries.GetIssue(ctx, ft.IssueID); err == nil {
 			workspaceID = util.UUIDToString(issue.WorkspaceID)
 			// If the issue is still in_progress and no other active tasks remain,
-			// reset it back to todo so the daemon can pick it up again.
+			// mark it blocked so a human can decide the next intervention.
 			issueKey := util.UUIDToString(ft.IssueID)
 			if issue.Status == "in_progress" && !processedIssues[issueKey] {
 				processedIssues[issueKey] = true
@@ -191,9 +191,9 @@ func broadcastFailedTasks(ctx context.Context, queries *db.Queries, bus *events.
 				} else if !hasActive {
 					if _, updateErr := queries.UpdateIssueStatus(ctx, db.UpdateIssueStatusParams{
 						ID:     ft.IssueID,
-						Status: "todo",
+						Status: "blocked",
 					}); updateErr != nil {
-						slog.Warn("runtime sweeper: failed to reset stuck issue to todo",
+						slog.Warn("runtime sweeper: failed to mark stuck issue blocked",
 							"issue_id", issueKey,
 							"error", updateErr,
 						)

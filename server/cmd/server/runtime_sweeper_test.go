@@ -300,13 +300,13 @@ func TestSweepDispatchedStaleTask(t *testing.T) {
 	}
 }
 
-// TestSweepResetsInProgressIssueToTodo verifies the core fix: when the sweeper
+// TestSweepMarksInProgressIssueBlocked verifies the core fix: when the sweeper
 // force-fails a stale task whose issue is still in_progress (because the daemon
-// crashed mid-run), the issue is reset back to todo so the daemon can re-queue it.
+// crashed mid-run), the issue is marked blocked so a human can intervene.
 //
 // Without this fix the issue stays in_progress permanently — the agent never runs
 // to update the status because it was never dispatched.
-func TestSweepResetsInProgressIssueToTodo(t *testing.T) {
+func TestSweepMarksInProgressIssueBlocked(t *testing.T) {
 	if testPool == nil {
 		t.Skip("no database connection")
 	}
@@ -377,7 +377,7 @@ func TestSweepResetsInProgressIssueToTodo(t *testing.T) {
 		t.Fatalf("expected task %s to be in failed tasks, got %v", taskID, failedTasks)
 	}
 
-	// This is what we're testing: issue must be reset from in_progress → todo.
+	// This is what we're testing: issue must be reset from in_progress → blocked.
 	broadcastFailedTasks(ctx, queries, bus, failedTasks)
 
 	var issueStatus string
@@ -385,8 +385,8 @@ func TestSweepResetsInProgressIssueToTodo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to query issue status: %v", err)
 	}
-	if issueStatus != "todo" {
-		t.Fatalf("expected issue status 'todo' after sweep, got '%s' — issue is stuck", issueStatus)
+	if issueStatus != "blocked" {
+		t.Fatalf("expected issue status 'blocked' after sweep, got '%s' — issue is stuck", issueStatus)
 	}
 }
 

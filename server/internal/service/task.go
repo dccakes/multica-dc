@@ -477,6 +477,7 @@ func (s *TaskService) StartTask(ctx context.Context, taskID pgtype.UUID) (*db.Ag
 // causing the new task to resume against a stale (or NULL) session.
 func (s *TaskService) CompleteTask(ctx context.Context, taskID pgtype.UUID, result []byte, sessionID, workDir string) (*db.AgentTaskQueue, error) {
 	var task db.AgentTaskQueue
+	var linkedIssue *db.Issue
 	if err := s.runInTx(ctx, func(qtx *db.Queries) error {
 		t, err := qtx.CompleteAgentTask(ctx, db.CompleteAgentTaskParams{
 			ID:        taskID,
@@ -488,6 +489,23 @@ func (s *TaskService) CompleteTask(ctx context.Context, taskID pgtype.UUID, resu
 			return err
 		}
 		task = t
+
+		if t.IssueID.Valid {
+			issue, err := qtx.GetIssue(ctx, t.IssueID)
+			if err != nil {
+				return err
+			}
+			if next := nextIssueStatusAfterTaskCompletion(issue.Status); next != "" {
+				updated, err := qtx.UpdateIssueStatus(ctx, db.UpdateIssueStatusParams{
+					ID:     t.IssueID,
+					Status: next,
+				})
+				if err != nil {
+					return err
+				}
+				linkedIssue = &updated
+			}
+		}
 
 		if t.ChatSessionID.Valid {
 			// COALESCE in SQL guarantees empty inputs don't wipe the
@@ -573,6 +591,9 @@ func (s *TaskService) CompleteTask(ctx context.Context, taskID pgtype.UUID, resu
 	s.ReconcileAgentStatus(ctx, task.AgentID)
 
 	// Broadcast
+	if linkedIssue != nil {
+		s.broadcastIssueUpdated(*linkedIssue)
+	}
 	s.broadcastTaskEvent(ctx, protocol.EventTaskCompleted, task)
 
 	return &task, nil
@@ -588,6 +609,7 @@ func (s *TaskService) CompleteTask(ctx context.Context, taskID pgtype.UUID, resu
 // chat turn would silently start a brand-new session and lose memory.
 func (s *TaskService) FailTask(ctx context.Context, taskID pgtype.UUID, errMsg, sessionID, workDir string) (*db.AgentTaskQueue, error) {
 	var task db.AgentTaskQueue
+	var linkedIssue *db.Issue
 	if err := s.runInTx(ctx, func(qtx *db.Queries) error {
 		t, err := qtx.FailAgentTask(ctx, db.FailAgentTaskParams{
 			ID:        taskID,
@@ -599,6 +621,23 @@ func (s *TaskService) FailTask(ctx context.Context, taskID pgtype.UUID, errMsg, 
 			return err
 		}
 		task = t
+
+		if t.IssueID.Valid {
+			issue, err := qtx.GetIssue(ctx, t.IssueID)
+			if err != nil {
+				return err
+			}
+			if next := nextIssueStatusAfterTaskFailure(issue.Status); next != "" {
+				updated, err := qtx.UpdateIssueStatus(ctx, db.UpdateIssueStatusParams{
+					ID:     t.IssueID,
+					Status: next,
+				})
+				if err != nil {
+					return err
+				}
+				linkedIssue = &updated
+			}
+		}
 
 		if t.ChatSessionID.Valid {
 			if err := qtx.UpdateChatSessionSession(ctx, db.UpdateChatSessionSessionParams{
@@ -633,6 +672,9 @@ func (s *TaskService) FailTask(ctx context.Context, taskID pgtype.UUID, errMsg, 
 
 	if errMsg != "" && task.IssueID.Valid {
 		s.createAgentComment(ctx, task.IssueID, task.AgentID, redact.Text(errMsg), "system", task.TriggerCommentID)
+	}
+	if linkedIssue != nil {
+		s.broadcastIssueUpdated(*linkedIssue)
 	}
 	// Reconcile agent status
 	s.ReconcileAgentStatus(ctx, task.AgentID)
@@ -894,6 +936,24 @@ func (s *TaskService) getIssuePrefix(workspaceID pgtype.UUID) string {
 		return ""
 	}
 	return ws.IssuePrefix
+}
+
+func nextIssueStatusAfterTaskCompletion(currentStatus string) string {
+	switch currentStatus {
+	case "done", "cancelled":
+		return ""
+	default:
+		return runtimepolicy.IssueStatusReadyForReview()
+	}
+}
+
+func nextIssueStatusAfterTaskFailure(currentStatus string) string {
+	switch currentStatus {
+	case "done", "cancelled":
+		return ""
+	default:
+		return runtimepolicy.IssueStatusNeedsHumanIntervention()
+	}
 }
 
 func (s *TaskService) createAgentComment(ctx context.Context, issueID, agentID pgtype.UUID, content, commentType string, parentID pgtype.UUID) {

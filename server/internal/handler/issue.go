@@ -16,6 +16,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/logger"
+	"github.com/multica-ai/multica/server/internal/runtimepolicy"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
@@ -796,6 +797,8 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	actorType, actualCreatorID := h.resolveActor(r, creatorID, workspaceID)
+	creatorType := actorType
 
 	status := req.Status
 	if status == "" {
@@ -813,6 +816,10 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.AssigneeID != nil {
 		assigneeID = parseUUID(*req.AssigneeID)
+	}
+	if req.AssigneeType != nil && *req.AssigneeType == "agent" && !runtimepolicy.CanDelegateToAgent(actorType) {
+		writeError(w, http.StatusForbidden, "only a human owner can delegate to an agent")
+		return
 	}
 
 	// Enforce agent visibility: private agents can only be assigned by owner/admin.
@@ -888,9 +895,6 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to create issue")
 		return
 	}
-
-	// Determine creator identity: agent (via X-Agent-ID header) or member.
-	creatorType, actualCreatorID := h.resolveActor(r, creatorID, workspaceID)
 
 	issue, err := qtx.CreateIssue(r.Context(), db.CreateIssueParams{
 		WorkspaceID:    parseUUID(workspaceID),
@@ -1007,6 +1011,7 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 		EstimatedHours: prevIssue.EstimatedHours,
 		EstimateSource: prevIssue.EstimateSource,
 	}
+	actorType, actorID := h.resolveActor(r, userID, workspaceID)
 
 	// COALESCE fields — only set when explicitly provided
 	if req.Title != nil {
@@ -1101,6 +1106,29 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 			params.EstimateSource = pgtype.Text{Valid: false}
 		}
 	}
+	if req.AssigneeType != nil && *req.AssigneeType == "agent" && !runtimepolicy.CanDelegateToAgent(actorType) {
+		writeError(w, http.StatusForbidden, "only a human owner can delegate to an agent")
+		return
+	}
+	if req.Status != nil && *req.Status == "done" {
+		assigneeTypeValue := ""
+		if params.AssigneeType.Valid {
+			assigneeTypeValue = params.AssigneeType.String
+		}
+		assigneeIDValue := ""
+		if params.AssigneeID.Valid {
+			assigneeIDValue = uuidToString(params.AssigneeID)
+		}
+		if ownerID, ok := runtimepolicy.ResolveIssueOwner(
+			assigneeTypeValue,
+			assigneeIDValue,
+			prevIssue.CreatorType,
+			uuidToString(prevIssue.CreatorID),
+		); !ok || !runtimepolicy.CanCompleteIssue(actorType == "member" && actorID == ownerID) {
+			writeError(w, http.StatusForbidden, "only the issue owner can mark this issue done")
+			return
+		}
+	}
 
 	// Enforce agent visibility: private agents can only be assigned by owner/admin.
 	if req.AssigneeType != nil && *req.AssigneeType == "agent" && req.AssigneeID != nil {
@@ -1130,9 +1158,6 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 	prevDueDate := timestampToPtr(prevIssue.DueDate)
 	dueDateChanged := prevDueDate != resp.DueDate && (prevDueDate == nil) != (resp.DueDate == nil) ||
 		(prevDueDate != nil && resp.DueDate != nil && *prevDueDate != *resp.DueDate)
-
-	// Determine actor identity: agent (via X-Agent-ID header) or member.
-	actorType, actorID := h.resolveActor(r, userID, workspaceID)
 
 	h.publish(protocol.EventIssueUpdated, workspaceID, actorType, actorID, map[string]any{
 		"issue":               resp,
@@ -1357,6 +1382,7 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 			ParentIssueID: prevIssue.ParentIssueID,
 			ProjectID:     prevIssue.ProjectID,
 		}
+		actorType, actorID := h.resolveActor(r, userID, workspaceID)
 
 		if req.Updates.Title != nil {
 			params.Title = pgtype.Text{String: *req.Updates.Title, Valid: true}
@@ -1442,6 +1468,28 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 				params.ProjectID = pgtype.UUID{Valid: false}
 			}
 		}
+		if req.Updates.AssigneeType != nil && *req.Updates.AssigneeType == "agent" && !runtimepolicy.CanDelegateToAgent(actorType) {
+			continue
+		}
+		if req.Updates.Status != nil && *req.Updates.Status == "done" {
+			assigneeTypeValue := ""
+			if params.AssigneeType.Valid {
+				assigneeTypeValue = params.AssigneeType.String
+			}
+			assigneeIDValue := ""
+			if params.AssigneeID.Valid {
+				assigneeIDValue = uuidToString(params.AssigneeID)
+			}
+			ownerID, ok := runtimepolicy.ResolveIssueOwner(
+				assigneeTypeValue,
+				assigneeIDValue,
+				prevIssue.CreatorType,
+				uuidToString(prevIssue.CreatorID),
+			)
+			if !ok || !runtimepolicy.CanCompleteIssue(actorType == "member" && actorID == ownerID) {
+				continue
+			}
+		}
 
 		// Enforce agent visibility for batch assignment.
 		if req.Updates.AssigneeType != nil && *req.Updates.AssigneeType == "agent" && req.Updates.AssigneeID != nil {
@@ -1458,8 +1506,6 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 
 		prefix := h.getIssuePrefix(r.Context(), issue.WorkspaceID)
 		resp := issueToResponse(issue, prefix)
-		actorType, actorID := h.resolveActor(r, userID, workspaceID)
-
 		assigneeChanged := (req.Updates.AssigneeType != nil || req.Updates.AssigneeID != nil) &&
 			(prevIssue.AssigneeType.String != issue.AssigneeType.String || uuidToString(prevIssue.AssigneeID) != uuidToString(issue.AssigneeID))
 		statusChanged := req.Updates.Status != nil && prevIssue.Status != issue.Status

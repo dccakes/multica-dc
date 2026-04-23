@@ -81,6 +81,54 @@ func TestServicePermissionFacade(t *testing.T) {
 	}
 }
 
+func TestResolveIssueOwner(t *testing.T) {
+	if got, ok := ResolveIssueOwner("member", "member-1", "member", "creator-1"); !ok || got != "member-1" {
+		t.Fatalf("ResolveIssueOwner(member assignee) = %q, %v; want member-1, true", got, ok)
+	}
+	if got, ok := ResolveIssueOwner("agent", "agent-1", "member", "creator-1"); !ok || got != "creator-1" {
+		t.Fatalf("ResolveIssueOwner(agent assignee) = %q, %v; want creator-1, true", got, ok)
+	}
+	if got, ok := ResolveIssueOwner("", "", "member", "creator-1"); !ok || got != "creator-1" {
+		t.Fatalf("ResolveIssueOwner(creator fallback) = %q, %v; want creator-1, true", got, ok)
+	}
+	if got, ok := ResolveIssueOwner("agent", "agent-1", "agent", "creator-1"); ok || got != "" {
+		t.Fatalf("ResolveIssueOwner(agent/agent) = %q, %v; want empty, false", got, ok)
+	}
+}
+
+func TestLifecycleIssueStatusHelpers(t *testing.T) {
+	if got := IssueStatusReadyForReview(); got != "in_review" {
+		t.Fatalf("IssueStatusReadyForReview() = %q, want in_review", got)
+	}
+	if got := IssueStatusNeedsHumanIntervention(); got != "blocked" {
+		t.Fatalf("IssueStatusNeedsHumanIntervention() = %q, want blocked", got)
+	}
+	if !CanDelegateToAgent("member") {
+		t.Fatal("member must be allowed to delegate to agent")
+	}
+	if CanDelegateToAgent("agent") {
+		t.Fatal("agent must not be allowed to delegate to agent")
+	}
+}
+
+func TestInterventionActionTargetStatus(t *testing.T) {
+	cases := map[InterventionAction]string{
+		InterventionActionResumeSandbox:  "in_progress",
+		InterventionActionResumeSnapshot: "in_progress",
+		InterventionActionHandoffLocal:   "in_progress",
+		InterventionActionArchive:        "cancelled",
+		InterventionActionForceClose:     "cancelled",
+	}
+	for action, want := range cases {
+		if got, ok := InterventionActionTargetStatus(action); !ok || got != want {
+			t.Fatalf("InterventionActionTargetStatus(%q) = %q, %v; want %q, true", action, got, ok, want)
+		}
+	}
+	if got, ok := InterventionActionTargetStatus("unknown"); ok || got != "" {
+		t.Fatalf("InterventionActionTargetStatus(unknown) = %q, %v; want empty, false", got, ok)
+	}
+}
+
 func TestCheckpointValidation(t *testing.T) {
 	expiry := time.Now().Add(time.Hour)
 	valid := Checkpoint{

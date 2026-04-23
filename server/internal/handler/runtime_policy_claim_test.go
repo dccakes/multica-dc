@@ -402,3 +402,130 @@ func TestUpdateIssue_AllowsHumanReassignmentWhileTaskIsActive(t *testing.T) {
 		t.Fatalf("task status = %q, want running after human reassignment", status)
 	}
 }
+
+func TestUpdateIssue_RejectsAgentDelegationFromAgentActor(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	var agentID string
+	if err := testPool.QueryRow(ctx, `
+		SELECT id FROM agent WHERE runtime_id = $1 LIMIT 1
+	`, handlerTestRuntimeID(t)).Scan(&agentID); err != nil {
+		t.Fatalf("load agent: %v", err)
+	}
+
+	var issueID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO issue (workspace_id, title, status, priority, creator_type, creator_id)
+		VALUES ($1, 'agent delegation guard', 'todo', 'medium', 'member', $2)
+		RETURNING id
+	`, testWorkspaceID, testUserID).Scan(&issueID); err != nil {
+		t.Fatalf("create issue: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM issue WHERE id = $1`, issueID)
+	})
+
+	w := httptest.NewRecorder()
+	req := newRequest(http.MethodPut, "/api/issues/"+issueID, map[string]any{
+		"assignee_type": "agent",
+		"assignee_id":   agentID,
+	})
+	req.Header.Set("X-Agent-ID", agentID)
+	req = withURLParam(req, "id", issueID)
+
+	testHandler.UpdateIssue(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("UpdateIssue: expected 403, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var assigneeType, assigneeID string
+	if err := testPool.QueryRow(ctx, `
+		SELECT COALESCE(assignee_type, ''), COALESCE(assignee_id::text, '')
+		FROM issue WHERE id = $1
+	`, issueID).Scan(&assigneeType, &assigneeID); err != nil {
+		t.Fatalf("load issue assignee: %v", err)
+	}
+	if assigneeType != "" || assigneeID != "" {
+		t.Fatalf("issue was delegated by agent unexpectedly: type=%q id=%q", assigneeType, assigneeID)
+	}
+}
+
+func TestUpdateIssue_RequiresOwnerToMarkDone(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	var otherUserID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO "user" (name, email)
+		VALUES ('Completion Guard User', 'completion-guard@multica.ai')
+		RETURNING id
+	`).Scan(&otherUserID); err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM "user" WHERE id = $1`, otherUserID)
+	})
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO member (workspace_id, user_id, role)
+		VALUES ($1, $2, 'member')
+	`, testWorkspaceID, otherUserID); err != nil {
+		t.Fatalf("create member: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM member WHERE user_id = $1 AND workspace_id = $2`, otherUserID, testWorkspaceID)
+	})
+
+	var issueID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO issue (workspace_id, title, status, priority, assignee_type, assignee_id, creator_type, creator_id)
+		VALUES ($1, 'completion ownership guard', 'todo', 'medium', 'member', $2, 'member', $2)
+		RETURNING id
+	`, testWorkspaceID, testUserID).Scan(&issueID); err != nil {
+		t.Fatalf("create issue: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM issue WHERE id = $1`, issueID)
+	})
+
+	w := httptest.NewRecorder()
+	req := newRequest(http.MethodPut, "/api/issues/"+issueID, map[string]any{
+		"status": "done",
+	})
+	req.Header.Set("X-User-ID", otherUserID)
+	req = withURLParam(req, "id", issueID)
+
+	testHandler.UpdateIssue(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("UpdateIssue: expected 403, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var status string
+	if err := testPool.QueryRow(ctx, `SELECT status FROM issue WHERE id = $1`, issueID).Scan(&status); err != nil {
+		t.Fatalf("load issue status: %v", err)
+	}
+	if status != "todo" {
+		t.Fatalf("issue status = %q, want todo after rejected completion", status)
+	}
+
+	okReq := newRequest(http.MethodPut, "/api/issues/"+issueID, map[string]any{
+		"status": "done",
+	})
+	okReq = withURLParam(okReq, "id", issueID)
+	okW := httptest.NewRecorder()
+	testHandler.UpdateIssue(okW, okReq)
+	if okW.Code != http.StatusOK {
+		t.Fatalf("owner UpdateIssue: expected 200, got %d: %s", okW.Code, okW.Body.String())
+	}
+
+	if err := testPool.QueryRow(ctx, `SELECT status FROM issue WHERE id = $1`, issueID).Scan(&status); err != nil {
+		t.Fatalf("reload issue status: %v", err)
+	}
+	if status != "done" {
+		t.Fatalf("issue status = %q, want done after owner completion", status)
+	}
+}

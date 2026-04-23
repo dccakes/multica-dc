@@ -28,12 +28,32 @@ func (s *Service) CanManageBudgets(role string) bool {
 	return CanManageBudgets(role)
 }
 
+func (s *Service) CanDelegateToAgent(actorType string) bool {
+	return CanDelegateToAgent(actorType)
+}
+
 func (s *Service) CanCompleteIssue(isIssueOwner bool) bool {
 	return CanCompleteIssue(isIssueOwner)
 }
 
 func (s *Service) CanOverrideAgentAssumption(hasPermission bool) bool {
 	return CanOverrideAgentAssumption(hasPermission)
+}
+
+func (s *Service) ResolveIssueOwner(assigneeType, assigneeID, creatorType, creatorID string) (string, bool) {
+	return ResolveIssueOwner(assigneeType, assigneeID, creatorType, creatorID)
+}
+
+func (s *Service) IssueStatusReadyForReview() string {
+	return IssueStatusReadyForReview()
+}
+
+func (s *Service) IssueStatusNeedsHumanIntervention() string {
+	return IssueStatusNeedsHumanIntervention()
+}
+
+func (s *Service) InterventionActionTargetStatus(action InterventionAction) (string, bool) {
+	return InterventionActionTargetStatus(action)
 }
 
 func (s *Service) ValidateCheckpoint(cp Checkpoint) error {
