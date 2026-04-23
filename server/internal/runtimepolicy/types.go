@@ -5,7 +5,7 @@ import "strings"
 type RuntimeType string
 
 const (
-	RuntimeTypeLocal  RuntimeType = "local"
+	RuntimeTypeLocal   RuntimeType = "local"
 	RuntimeTypeVercel  RuntimeType = "vercel"
 	RuntimeTypeRemote  RuntimeType = "remote"
 	RuntimeTypeCloud   RuntimeType = "cloud"
@@ -24,7 +24,7 @@ const (
 type InterventionAction string
 
 const (
-	InterventionActionResumeSandbox InterventionAction = "resume_from_sandbox"
+	InterventionActionResumeSandbox  InterventionAction = "resume_from_sandbox"
 	InterventionActionResumeSnapshot InterventionAction = "resume_from_snapshot"
 	InterventionActionHandoffLocal   InterventionAction = "handoff_to_local"
 	InterventionActionArchive        InterventionAction = "archive"

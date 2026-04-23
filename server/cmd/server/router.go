@@ -70,7 +70,7 @@ func NewRouter(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus) chi.Route
 	}
 
 	cfSigner := auth.NewCloudFrontSignerFromEnv()
-	
+
 	signupConfig := handler.Config{
 		AllowSignup:         os.Getenv("ALLOW_SIGNUP") != "false",
 		AllowedEmails:       splitAndTrim(os.Getenv("ALLOWED_EMAILS")),
@@ -188,6 +188,8 @@ func NewRouter(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus) chi.Route
 					r.Use(middleware.RequireWorkspaceRoleFromURL(queries, "id", "owner", "admin"))
 					r.Put("/", h.UpdateWorkspace)
 					r.Patch("/", h.UpdateWorkspace)
+					r.Get("/runtime-policy", h.GetWorkspaceRuntimePolicy)
+					r.Put("/runtime-policy", h.UpdateWorkspaceRuntimePolicy)
 					r.Post("/members", h.CreateInvitation)
 					r.Route("/members/{memberId}", func(r chi.Router) {
 						r.Patch("/", h.UpdateMember)
@@ -231,6 +233,9 @@ func NewRouter(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus) chi.Route
 					r.Get("/", h.GetIssue)
 					r.Put("/", h.UpdateIssue)
 					r.Delete("/", h.DeleteIssue)
+					r.Get("/runtime-policy", h.GetIssueRuntimePolicy)
+					r.Put("/runtime-policy", h.UpdateIssueRuntimePolicy)
+					r.Delete("/runtime-policy", h.DeleteIssueRuntimePolicy)
 					r.Post("/comments", h.CreateComment)
 					r.Get("/comments", h.ListComments)
 					r.Get("/timeline", h.ListTimeline)

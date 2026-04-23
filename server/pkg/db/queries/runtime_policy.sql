@@ -32,15 +32,18 @@ WHERE issue_id = $1;
 INSERT INTO issue_budget_override (
     issue_id,
     budget_cents,
+    remote_concurrency_limit,
     updated_by
 ) VALUES (
     @issue_id,
     @budget_cents,
+    @remote_concurrency_limit,
     @updated_by
 )
 ON CONFLICT (issue_id)
 DO UPDATE SET
     budget_cents = EXCLUDED.budget_cents,
+    remote_concurrency_limit = EXCLUDED.remote_concurrency_limit,
     updated_by = EXCLUDED.updated_by,
     updated_at = now()
 RETURNING *;

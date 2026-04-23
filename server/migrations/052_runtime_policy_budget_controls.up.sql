@@ -10,6 +10,7 @@ CREATE TABLE workspace_runtime_policy (
 CREATE TABLE issue_budget_override (
     issue_id UUID PRIMARY KEY REFERENCES issue(id) ON DELETE CASCADE,
     budget_cents BIGINT NOT NULL,
+    remote_concurrency_limit INT DEFAULT NULL,
     updated_by UUID NOT NULL REFERENCES "user"(id),
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()

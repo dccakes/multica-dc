@@ -33,11 +33,12 @@ type WorkspacePolicy struct {
 }
 
 type IssueBudgetOverride struct {
-	IssueID     string
-	BudgetCents int64
-	UpdatedBy   string
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	IssueID                string
+	BudgetCents            int64
+	RemoteConcurrencyLimit pgtype.Int4
+	UpdatedBy              string
+	CreatedAt              time.Time
+	UpdatedAt              time.Time
 }
 
 type TaskCostLedger struct {
@@ -98,21 +99,23 @@ func (s *Store) UpsertIssueBudgetOverride(ctx context.Context, override IssueBud
 		INSERT INTO issue_budget_override (
 			issue_id,
 			budget_cents,
+			remote_concurrency_limit,
 			updated_by
-		) VALUES ($1, $2, $3)
+		) VALUES ($1, $2, $3, $4)
 		ON CONFLICT (issue_id)
 		DO UPDATE SET
 			budget_cents = EXCLUDED.budget_cents,
+			remote_concurrency_limit = EXCLUDED.remote_concurrency_limit,
 			updated_by = EXCLUDED.updated_by,
 			updated_at = now()
-		RETURNING issue_id, budget_cents, updated_by, created_at, updated_at
-	`, override.IssueID, override.BudgetCents, override.UpdatedBy)
+		RETURNING issue_id, budget_cents, remote_concurrency_limit, updated_by, created_at, updated_at
+	`, override.IssueID, override.BudgetCents, override.RemoteConcurrencyLimit, override.UpdatedBy)
 	return scanIssueBudgetOverride(row)
 }
 
 func (s *Store) GetIssueBudgetOverride(ctx context.Context, issueID string) (IssueBudgetOverride, error) {
 	row := s.db.QueryRow(ctx, `
-		SELECT issue_id, budget_cents, updated_by, created_at, updated_at
+		SELECT issue_id, budget_cents, remote_concurrency_limit, updated_by, created_at, updated_at
 		FROM issue_budget_override
 		WHERE issue_id = $1
 	`, issueID)
@@ -210,6 +213,7 @@ func scanIssueBudgetOverride(row pgx.Row) (IssueBudgetOverride, error) {
 	if err := row.Scan(
 		&override.IssueID,
 		&override.BudgetCents,
+		&override.RemoteConcurrencyLimit,
 		&override.UpdatedBy,
 		&override.CreatedAt,
 		&override.UpdatedAt,
