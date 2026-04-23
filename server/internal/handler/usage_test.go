@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -61,7 +62,7 @@ func TestWorkspaceUsage_BucketsByUsageTime(t *testing.T) {
 		}
 		if _, err := testPool.Exec(ctx, `
 			INSERT INTO task_usage (task_id, provider, model, input_tokens, output_tokens, created_at)
-			VALUES ($1, 'claude', 'claude-3-5-sonnet', $2, 0, $3)
+			VALUES ($1, 'claude', 'claude-sonnet-4-5', $2, 0, $3)
 		`, taskID, inputTokens, usageAt); err != nil {
 			t.Fatalf("insert task_usage: %v", err)
 		}
@@ -70,7 +71,7 @@ func TestWorkspaceUsage_BucketsByUsageTime(t *testing.T) {
 		})
 	}
 
-	insertTaskWithUsage(yesterdayLate, todayEarly, 1000)         // cross-midnight
+	insertTaskWithUsage(yesterdayLate, todayEarly, 1000)          // cross-midnight
 	insertTaskWithUsage(yesterdayMorning, yesterdayMorning, 2000) // full-day yesterday
 
 	// /api/usage/daily — daily breakdown.
@@ -113,9 +114,10 @@ func TestWorkspaceUsage_BucketsByUsageTime(t *testing.T) {
 		t.Fatalf("GetWorkspaceUsageSummary: expected 200, got %d: %s", w.Code, w.Body.String())
 	}
 	type summaryRow struct {
-		Model            string `json:"model"`
-		TotalInputTokens int64  `json:"total_input_tokens"`
-		TaskCount        int32  `json:"task_count"`
+		Model            string  `json:"model"`
+		TotalInputTokens int64   `json:"total_input_tokens"`
+		TaskCount        int32   `json:"task_count"`
+		EstimatedCost    float64 `json:"estimated_cost"`
 	}
 	var summaryResp []summaryRow
 	if err := json.NewDecoder(w.Body).Decode(&summaryResp); err != nil {
@@ -123,16 +125,22 @@ func TestWorkspaceUsage_BucketsByUsageTime(t *testing.T) {
 	}
 	var totalInput int64
 	var totalTasks int32
+	var totalCost float64
 	for _, r := range summaryResp {
-		if r.Model == "claude-3-5-sonnet" {
+		if r.Model == "claude-sonnet-4-5" {
 			totalInput += r.TotalInputTokens
 			totalTasks += r.TaskCount
+			totalCost += r.EstimatedCost
 		}
 	}
 	if totalInput < 3000 {
-		t.Errorf("summary: claude-3-5-sonnet input tokens expected >=3000 (1000 + 2000), got %d (full resp: %v)", totalInput, summaryResp)
+		t.Errorf("summary: claude-sonnet-4-5 input tokens expected >=3000 (1000 + 2000), got %d (full resp: %v)", totalInput, summaryResp)
 	}
 	if totalTasks < 2 {
-		t.Errorf("summary: claude-3-5-sonnet task_count expected >=2, got %d (full resp: %v)", totalTasks, summaryResp)
+		t.Errorf("summary: claude-sonnet-4-5 task_count expected >=2, got %d (full resp: %v)", totalTasks, summaryResp)
+	}
+	wantCost := (1000*3 + 2000*3) / 1_000_000.0
+	if math.Abs(totalCost-wantCost) > 1e-9 {
+		t.Errorf("summary: estimated cost expected %f, got %f (full resp: %v)", wantCost, totalCost, summaryResp)
 	}
 }

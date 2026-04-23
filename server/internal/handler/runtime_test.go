@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -68,7 +69,7 @@ func TestGetRuntimeUsage_BucketsByUsageTime(t *testing.T) {
 		}
 		if _, err := testPool.Exec(ctx, `
 			INSERT INTO task_usage (task_id, provider, model, input_tokens, output_tokens, created_at)
-			VALUES ($1, 'claude', 'claude-3-5-sonnet', $2, 0, $3)
+			VALUES ($1, 'claude', 'claude-sonnet-4-5', $2, 0, $3)
 		`, taskID, inputTokens, usageAt); err != nil {
 			t.Fatalf("insert task_usage: %v", err)
 		}
@@ -78,7 +79,7 @@ func TestGetRuntimeUsage_BucketsByUsageTime(t *testing.T) {
 		return taskID
 	}
 
-	insertTaskWithUsage(yesterdayLate, todayEarly, 1000)     // cross-midnight
+	insertTaskWithUsage(yesterdayLate, todayEarly, 1000)          // cross-midnight
 	insertTaskWithUsage(yesterdayMorning, yesterdayMorning, 2000) // full-day yesterday
 
 	// Call the handler with ?days=1 at whatever "now" is. That should include
@@ -97,8 +98,12 @@ func TestGetRuntimeUsage_BucketsByUsageTime(t *testing.T) {
 	}
 
 	byDate := make(map[string]int64)
+	var totalCost float64
 	for _, r := range resp {
 		byDate[r.Date] += r.InputTokens
+		if r.Model == "claude-sonnet-4-5" {
+			totalCost += r.EstimatedCost
+		}
 	}
 
 	todayKey := today.Format("2006-01-02")
@@ -113,5 +118,9 @@ func TestGetRuntimeUsage_BucketsByUsageTime(t *testing.T) {
 	// when ?days=N is interpreted as a rolling window instead of calendar days.
 	if byDate[yesterdayKey] != 2000 {
 		t.Errorf("yesterday morning task: yesterday bucket expected 2000 input tokens, got %d (full map: %v)", byDate[yesterdayKey], byDate)
+	}
+	wantCost := (1000*3 + 2000*3) / 1_000_000.0
+	if math.Abs(totalCost-wantCost) > 1e-9 {
+		t.Errorf("estimated cost expected %f, got %f (full resp: %v)", wantCost, totalCost, resp)
 	}
 }

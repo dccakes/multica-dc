@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -63,14 +64,51 @@ func runtimeToResponse(rt db.AgentRuntime) AgentRuntimeResponse {
 // ---------------------------------------------------------------------------
 
 type RuntimeUsageResponse struct {
-	RuntimeID        string `json:"runtime_id"`
-	Date             string `json:"date"`
-	Provider         string `json:"provider"`
-	Model            string `json:"model"`
-	InputTokens      int64  `json:"input_tokens"`
-	OutputTokens     int64  `json:"output_tokens"`
-	CacheReadTokens  int64  `json:"cache_read_tokens"`
-	CacheWriteTokens int64  `json:"cache_write_tokens"`
+	RuntimeID        string  `json:"runtime_id"`
+	Date             string  `json:"date"`
+	Provider         string  `json:"provider"`
+	Model            string  `json:"model"`
+	InputTokens      int64   `json:"input_tokens"`
+	OutputTokens     int64   `json:"output_tokens"`
+	CacheReadTokens  int64   `json:"cache_read_tokens"`
+	CacheWriteTokens int64   `json:"cache_write_tokens"`
+	EstimatedCost    float64 `json:"estimated_cost"`
+}
+
+type usagePricing struct {
+	input      float64
+	output     float64
+	cacheRead  float64
+	cacheWrite float64
+}
+
+var modelUsagePricing = map[string]usagePricing{
+	"claude-haiku-4-5":  {input: 1, output: 5, cacheRead: 0.1, cacheWrite: 1.25},
+	"claude-sonnet-4-5": {input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75},
+	"claude-sonnet-4-6": {input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75},
+	"claude-opus-4-5":   {input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25},
+	"claude-opus-4-6":   {input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25},
+}
+
+func estimateUsageCost(model string, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens int64) float64 {
+	pricing, ok := modelUsagePricing[model]
+	if !ok {
+		for prefix, candidate := range modelUsagePricing {
+			if strings.HasPrefix(model, prefix) {
+				pricing = candidate
+				ok = true
+				break
+			}
+		}
+	}
+	if !ok {
+		return 0
+	}
+
+	return (float64(inputTokens)*pricing.input +
+		float64(outputTokens)*pricing.output +
+		float64(cacheReadTokens)*pricing.cacheRead +
+		float64(cacheWriteTokens)*pricing.cacheWrite) / 1_000_000
 }
 
 // GetRuntimeUsage returns daily token usage for a runtime, aggregated from
@@ -112,6 +150,7 @@ func (h *Handler) GetRuntimeUsage(w http.ResponseWriter, r *http.Request) {
 			OutputTokens:     row.OutputTokens,
 			CacheReadTokens:  row.CacheReadTokens,
 			CacheWriteTokens: row.CacheWriteTokens,
+			EstimatedCost:    estimateUsageCost(row.Model, row.InputTokens, row.OutputTokens, row.CacheReadTokens, row.CacheWriteTokens),
 		}
 	}
 
@@ -166,13 +205,14 @@ func (h *Handler) GetWorkspaceUsageByDay(w http.ResponseWriter, r *http.Request)
 	}
 
 	type DailyUsageRow struct {
-		Date                  string `json:"date"`
-		Model                 string `json:"model"`
-		TotalInputTokens      int64  `json:"total_input_tokens"`
-		TotalOutputTokens     int64  `json:"total_output_tokens"`
-		TotalCacheReadTokens  int64  `json:"total_cache_read_tokens"`
-		TotalCacheWriteTokens int64  `json:"total_cache_write_tokens"`
-		TaskCount             int32  `json:"task_count"`
+		Date                  string  `json:"date"`
+		Model                 string  `json:"model"`
+		TotalInputTokens      int64   `json:"total_input_tokens"`
+		TotalOutputTokens     int64   `json:"total_output_tokens"`
+		TotalCacheReadTokens  int64   `json:"total_cache_read_tokens"`
+		TotalCacheWriteTokens int64   `json:"total_cache_write_tokens"`
+		TaskCount             int32   `json:"task_count"`
+		EstimatedCost         float64 `json:"estimated_cost"`
 	}
 
 	resp := make([]DailyUsageRow, len(rows))
@@ -185,6 +225,7 @@ func (h *Handler) GetWorkspaceUsageByDay(w http.ResponseWriter, r *http.Request)
 			TotalCacheReadTokens:  row.TotalCacheReadTokens,
 			TotalCacheWriteTokens: row.TotalCacheWriteTokens,
 			TaskCount:             row.TaskCount,
+			EstimatedCost:         estimateUsageCost(row.Model, row.TotalInputTokens, row.TotalOutputTokens, row.TotalCacheReadTokens, row.TotalCacheWriteTokens),
 		}
 	}
 
@@ -206,12 +247,13 @@ func (h *Handler) GetWorkspaceUsageSummary(w http.ResponseWriter, r *http.Reques
 	}
 
 	type UsageSummaryRow struct {
-		Model                 string `json:"model"`
-		TotalInputTokens      int64  `json:"total_input_tokens"`
-		TotalOutputTokens     int64  `json:"total_output_tokens"`
-		TotalCacheReadTokens  int64  `json:"total_cache_read_tokens"`
-		TotalCacheWriteTokens int64  `json:"total_cache_write_tokens"`
-		TaskCount             int32  `json:"task_count"`
+		Model                 string  `json:"model"`
+		TotalInputTokens      int64   `json:"total_input_tokens"`
+		TotalOutputTokens     int64   `json:"total_output_tokens"`
+		TotalCacheReadTokens  int64   `json:"total_cache_read_tokens"`
+		TotalCacheWriteTokens int64   `json:"total_cache_write_tokens"`
+		TaskCount             int32   `json:"task_count"`
+		EstimatedCost         float64 `json:"estimated_cost"`
 	}
 
 	resp := make([]UsageSummaryRow, len(rows))
@@ -223,6 +265,7 @@ func (h *Handler) GetWorkspaceUsageSummary(w http.ResponseWriter, r *http.Reques
 			TotalCacheReadTokens:  row.TotalCacheReadTokens,
 			TotalCacheWriteTokens: row.TotalCacheWriteTokens,
 			TaskCount:             row.TaskCount,
+			EstimatedCost:         estimateUsageCost(row.Model, row.TotalInputTokens, row.TotalOutputTokens, row.TotalCacheReadTokens, row.TotalCacheWriteTokens),
 		}
 	}
 
