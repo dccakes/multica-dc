@@ -16,6 +16,16 @@ import { ProviderLogo } from "./provider-logo";
 
 type RuntimeFilter = "mine" | "all";
 
+function runtimeExecutionState(runtime: AgentRuntime): string | null {
+  const raw = runtime.metadata?.execution_state;
+  if (typeof raw !== "string") return null;
+
+  if (raw === "needs_human_intervention") return "needs intervention";
+  if (raw === "paused_budget_blocked") return "paused (budget)";
+  if (raw === "blocked_budget") return "blocked (budget)";
+  return null;
+}
+
 function RuntimeListItem({
   runtime,
   isSelected,
@@ -30,6 +40,7 @@ function RuntimeListItem({
   onClick: () => void;
 }) {
   const runtimeModeLabel = runtime.runtime_mode === "cloud" ? "remote" : "local";
+  const executionState = runtimeExecutionState(runtime);
 
   return (
     <button
@@ -61,6 +72,11 @@ function RuntimeListItem({
         </div>
       </div>
       <div className="flex items-center gap-1.5 shrink-0">
+        {executionState && (
+          <span className="rounded border border-border/60 bg-muted px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+            {executionState}
+          </span>
+        )}
         {hasUpdate && (
           <span title="Update available">
             <ArrowUpCircle className="h-3.5 w-3.5 text-info" />

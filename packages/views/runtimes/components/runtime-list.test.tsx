@@ -71,4 +71,14 @@ describe("RuntimeList runtime mode label", () => {
     renderList([localRuntime]);
     expect(await screen.findByText("local")).toBeInTheDocument();
   });
+
+  it("shows intervention state badge from runtime metadata", async () => {
+    renderList([
+      {
+        ...cloudRuntime,
+        metadata: { execution_state: "needs_human_intervention" },
+      },
+    ]);
+    expect(await screen.findByText("needs intervention")).toBeInTheDocument();
+  });
 });
