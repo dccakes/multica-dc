@@ -6,8 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -176,7 +176,7 @@ func (s *TaskService) CancelTask(ctx context.Context, taskID pgtype.UUID) (*db.A
 func (s *TaskService) ClaimTask(ctx context.Context, agentID pgtype.UUID) (*db.AgentTaskQueue, error) {
 	start := time.Now()
 	var (
-		outcome                                                            = "unknown"
+		outcome                                                              = "unknown"
 		getAgentMs, countRunningMs, claimAgentMs, updateStatusMs, dispatchMs int64
 	)
 	defer func() {
@@ -241,10 +241,10 @@ func (s *TaskService) ClaimTask(ctx context.Context, agentID pgtype.UUID) (*db.A
 func (s *TaskService) ClaimTaskForRuntime(ctx context.Context, runtimeID pgtype.UUID) (*db.AgentTaskQueue, error) {
 	start := time.Now()
 	var (
-		outcome             = "no_task"
-		listMs, loopMs      int64
-		listCount, tried    int
-		claimedFlag         bool
+		outcome          = "no_task"
+		listMs, loopMs   int64
+		listCount, tried int
+		claimedFlag      bool
 	)
 	defer func() {
 		totalMs := time.Since(start).Milliseconds()
@@ -625,6 +625,37 @@ func priorityToInt(p string) int32 {
 	}
 }
 
+func (s *TaskService) ResolveIssueEstimate(title, description string) float64 {
+	return ResolveIssueEstimate(title, description)
+}
+
+func ResolveIssueEstimate(title, description string) float64 {
+	text := strings.ToLower(title + " " + description)
+	switch {
+	case containsAny(text, "scaffold", "boilerplate", "template", "setup", "starter"):
+		return 16
+	case containsAny(text, "bug", "fix", "crash", "error", "regression"):
+		return 4
+	case containsAny(text, "design", "architecture", "architecture review", "rfc", "proposal"):
+		return 16
+	case containsAny(text, "research", "explore", "investigate", "spike"):
+		return 8
+	case containsAny(text, "test", "tests", "testing", "fixture", "assert"):
+		return 8
+	default:
+		return 40
+	}
+}
+
+func containsAny(text string, terms ...string) bool {
+	for _, term := range terms {
+		if strings.Contains(text, term) {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *TaskService) broadcastTaskDispatch(ctx context.Context, task db.AgentTaskQueue) {
 	var payload map[string]any
 	if task.Context != nil {
@@ -802,11 +833,21 @@ func issueToMap(issue db.Issue, issuePrefix string) map[string]any {
 		"creator_type":    issue.CreatorType,
 		"creator_id":      util.UUIDToString(issue.CreatorID),
 		"parent_issue_id": util.UUIDToPtr(issue.ParentIssueID),
+		"estimated_hours": float64ToPtr(issue.EstimatedHours),
+		"estimate_source": util.TextToPtr(issue.EstimateSource),
 		"position":        issue.Position,
 		"due_date":        util.TimestampToPtr(issue.DueDate),
 		"created_at":      util.TimestampToString(issue.CreatedAt),
 		"updated_at":      util.TimestampToString(issue.UpdatedAt),
 	}
+}
+
+func float64ToPtr(f pgtype.Float8) *float64 {
+	if !f.Valid {
+		return nil
+	}
+	v := f.Float64
+	return &v
 }
 
 // agentToMap builds a simple map for broadcasting agent status updates.

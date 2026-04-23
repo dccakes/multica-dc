@@ -111,24 +111,31 @@ func (s *AutopilotService) dispatchCreateIssue(ctx context.Context, ap db.Autopi
 
 	title := s.interpolateTemplate(ap)
 	description := s.buildIssueDescription(ap)
+	estimatedHours := pgtype.Float8{Float64: 40, Valid: true}
+	estimateSource := pgtype.Text{String: "agent", Valid: true}
+	if s.TaskSvc != nil {
+		estimatedHours = pgtype.Float8{Float64: s.TaskSvc.ResolveIssueEstimate(title, description.String), Valid: true}
+	}
 
 	issue, err := qtx.CreateIssueWithOrigin(ctx, db.CreateIssueWithOriginParams{
-		WorkspaceID:   ap.WorkspaceID,
-		Title:         title,
-		Description:   description,
-		Status:        "todo",
-		Priority:      ap.Priority,
-		AssigneeType:  pgtype.Text{String: "agent", Valid: true},
-		AssigneeID:    ap.AssigneeID,
-		CreatorType:   ap.CreatedByType,
-		CreatorID:     ap.CreatedByID,
-		ParentIssueID: pgtype.UUID{},
-		Position:      0,
-		DueDate:       pgtype.Timestamptz{},
-		Number:        issueNumber,
-		ProjectID:     ap.ProjectID,
-		OriginType:    pgtype.Text{String: "autopilot", Valid: true},
-		OriginID:      ap.ID,
+		WorkspaceID:    ap.WorkspaceID,
+		Title:          title,
+		Description:    description,
+		Status:         "todo",
+		Priority:       ap.Priority,
+		AssigneeType:   pgtype.Text{String: "agent", Valid: true},
+		AssigneeID:     ap.AssigneeID,
+		CreatorType:    ap.CreatedByType,
+		CreatorID:      ap.CreatedByID,
+		ParentIssueID:  pgtype.UUID{},
+		Position:       0,
+		DueDate:        pgtype.Timestamptz{},
+		Number:         issueNumber,
+		ProjectID:      ap.ProjectID,
+		EstimatedHours: estimatedHours,
+		EstimateSource: estimateSource,
+		OriginType:     pgtype.Text{String: "autopilot", Valid: true},
+		OriginID:       ap.ID,
 	})
 	if err != nil {
 		return fmt.Errorf("create issue: %w", err)
@@ -293,7 +300,6 @@ func (s *AutopilotService) SyncRunFromTask(ctx context.Context, task db.AgentTas
 		s.publishRunDone(wsID, run, "failed")
 	}
 }
-
 
 func (s *AutopilotService) failRun(ctx context.Context, runID pgtype.UUID, reason string) {
 	if _, err := s.Queries.UpdateAutopilotRunFailed(ctx, db.UpdateAutopilotRunFailedParams{

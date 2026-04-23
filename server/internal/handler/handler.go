@@ -90,11 +90,18 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 }
 
 // Thin wrappers around util functions (preserve existing handler code unchanged).
-func parseUUID(s string) pgtype.UUID                { return util.ParseUUID(s) }
-func uuidToString(u pgtype.UUID) string             { return util.UUIDToString(u) }
-func textToPtr(t pgtype.Text) *string               { return util.TextToPtr(t) }
-func ptrToText(s *string) pgtype.Text               { return util.PtrToText(s) }
-func strToText(s string) pgtype.Text                { return util.StrToText(s) }
+func parseUUID(s string) pgtype.UUID    { return util.ParseUUID(s) }
+func uuidToString(u pgtype.UUID) string { return util.UUIDToString(u) }
+func textToPtr(t pgtype.Text) *string   { return util.TextToPtr(t) }
+func ptrToText(s *string) pgtype.Text   { return util.PtrToText(s) }
+func strToText(s string) pgtype.Text    { return util.StrToText(s) }
+func float64ToPtr(f pgtype.Float8) *float64 {
+	if !f.Valid {
+		return nil
+	}
+	v := f.Float64
+	return &v
+}
 func timestampToString(t pgtype.Timestamptz) string { return util.TimestampToString(t) }
 func timestampToPtr(t pgtype.Timestamptz) *string   { return util.TimestampToPtr(t) }
 func uuidToPtr(u pgtype.UUID) *string               { return util.UUIDToPtr(u) }

@@ -35,6 +35,8 @@ export interface Issue {
   creator_id: string;
   parent_issue_id: string | null;
   project_id: string | null;
+  estimated_hours?: number | null;
+  estimate_source?: "human" | "agent" | null;
   position: number;
   due_date: string | null;
   reactions?: IssueReaction[];

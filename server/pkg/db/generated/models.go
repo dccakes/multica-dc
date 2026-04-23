@@ -292,6 +292,8 @@ type Issue struct {
 	ProjectID          pgtype.UUID        `json:"project_id"`
 	OriginType         pgtype.Text        `json:"origin_type"`
 	OriginID           pgtype.UUID        `json:"origin_id"`
+	EstimatedHours     pgtype.Float8      `json:"estimated_hours"`
+	EstimateSource     pgtype.Text        `json:"estimate_source"`
 }
 
 type IssueDependency struct {
