@@ -24,6 +24,21 @@ type TaskProgressPayload struct {
 	Total   int    `json:"total,omitempty"`
 }
 
+// TaskCheckpointPayload is broadcast when execution reaches an immediate
+// checkpoint trigger.
+type TaskCheckpointPayload struct {
+	TaskID             string `json:"task_id"`
+	WorkspaceID        string `json:"workspace_id,omitempty"`
+	IssueID            string `json:"issue_id,omitempty"`
+	Reason             string `json:"reason"`
+	Summary            string `json:"summary,omitempty"`
+	Step               int    `json:"step,omitempty"`
+	Total              int    `json:"total,omitempty"`
+	PRURL              string `json:"pr_url,omitempty"`
+	InterventionAction string `json:"intervention_action,omitempty"`
+	BudgetState        string `json:"budget_state,omitempty"`
+}
+
 // TaskCompletedPayload is sent from daemon to server when a task finishes.
 type TaskCompletedPayload struct {
 	TaskID string `json:"task_id"`
@@ -37,10 +52,10 @@ type TaskMessagePayload struct {
 	IssueID string         `json:"issue_id,omitempty"`
 	Seq     int            `json:"seq"`
 	Type    string         `json:"type"`              // "text", "tool_use", "tool_result", "error"
-	Tool    string         `json:"tool,omitempty"`     // tool name for tool_use/tool_result
-	Content string         `json:"content,omitempty"`  // text content
-	Input   map[string]any `json:"input,omitempty"`    // tool input (tool_use only)
-	Output  string         `json:"output,omitempty"`   // tool output (tool_result only)
+	Tool    string         `json:"tool,omitempty"`    // tool name for tool_use/tool_result
+	Content string         `json:"content,omitempty"` // text content
+	Input   map[string]any `json:"input,omitempty"`   // tool input (tool_use only)
+	Output  string         `json:"output,omitempty"`  // tool output (tool_result only)
 }
 
 // DaemonRegisterPayload is sent from daemon to server on connection.

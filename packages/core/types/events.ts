@@ -20,6 +20,7 @@ export type WSEventType =
   | "agent:restored"
   | "task:dispatch"
   | "task:progress"
+  | "task:checkpoint"
   | "task:completed"
   | "task:failed"
   | "task:message"
@@ -190,6 +191,19 @@ export interface TaskCompletedPayload {
   issue_id: string;
   chat_session_id?: string;
   status: string;
+}
+
+export interface TaskCheckpointPayload {
+  task_id: string;
+  workspace_id?: string;
+  issue_id?: string;
+  reason: string;
+  summary?: string;
+  step?: number;
+  total?: number;
+  pr_url?: string;
+  intervention_action?: string;
+  budget_state?: string;
 }
 
 export interface TaskFailedPayload {

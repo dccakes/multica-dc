@@ -24,8 +24,8 @@
 ## 4. Checkpointing and Resume Orchestration
 
 - [x] 4.1 Implement checkpoint writes on every state transition and 5-minute in-progress heartbeat
-- [ ] 4.2 Implement immediate checkpoint triggers (PR opened/updated, intervention transition, threshold crossing, pre-force-close)
-- [ ] 4.3 Implement safe-checkpoint pause boundaries (command step, git step, PR sync step, persisted checkpoint)
+- [x] 4.2 Implement immediate checkpoint triggers (PR opened/updated, intervention transition, threshold crossing, pre-force-close)
+- [x] 4.3 Implement safe-checkpoint pause boundaries (command step, git step, PR sync step, persisted checkpoint)
 - [x] 4.4 Implement resume eligibility checks (sandbox health + budget) and fallback order (sandbox -> snapshot -> local handoff)
 
 ## 5. UX and Communication Surfaces
@@ -40,5 +40,5 @@
 
 - [x] 6.1 Track billable spend (sandbox + model/token API) and non-billable local usage for productivity analytics
 - [x] 6.2 Support developer-provided effort estimate with agent auto-estimate fallback when missing
-- [ ] 6.3 Validate reliability success criteria across end-to-end chain (provision, setup, repo correctness, PR workflow, notification)
+- [x] 6.3 Validate reliability success criteria across end-to-end chain (provision, setup, repo correctness, PR workflow, notification)
 - [x] 6.4 Add tests for budget enforcement, permission gates, lifecycle transitions, checkpoint cadence, and resume fallback behavior

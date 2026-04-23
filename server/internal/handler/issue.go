@@ -1269,6 +1269,17 @@ func (h *Handler) ApplyIssueIntervention(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
+	checkpointReason := "intervention_transition"
+	if req.Action == runtimepolicy.InterventionActionForceClose {
+		checkpointReason = "pre_force_close"
+	}
+	h.publish(protocol.EventTaskCheckpoint, workspaceID, actorType, actorID, protocol.TaskCheckpointPayload{
+		IssueID:            uuidToString(issue.ID),
+		WorkspaceID:        workspaceID,
+		Reason:             checkpointReason,
+		InterventionAction: string(req.Action),
+	})
+
 	if err := h.TaskService.CancelTasksForIssue(r.Context(), issue.ID); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to cancel active tasks")
 		return

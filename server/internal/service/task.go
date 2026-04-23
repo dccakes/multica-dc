@@ -374,7 +374,17 @@ func (s *TaskService) canClaimBillableTask(ctx context.Context, candidate db.Age
 	if err != nil {
 		return false, "", fmt.Errorf("load issue spend: %w", err)
 	}
-	if runtimepolicy.ShouldPauseAtCheckpoint(runtimepolicy.ThresholdState(issueSpend, issueBudget), true) {
+	issueBudgetState := runtimepolicy.ThresholdState(issueSpend, issueBudget)
+	if issueBudgetState != runtimepolicy.BudgetStateOK {
+		s.publishCheckpointEvent(util.UUIDToString(issue.WorkspaceID), protocol.TaskCheckpointPayload{
+			TaskID:      util.UUIDToString(candidate.ID),
+			WorkspaceID: util.UUIDToString(issue.WorkspaceID),
+			IssueID:     util.UUIDToString(parentIssueID),
+			Reason:      "budget_threshold",
+			BudgetState: string(issueBudgetState),
+		})
+	}
+	if runtimepolicy.ShouldPauseAtCheckpoint(issueBudgetState, true) {
 		return false, "budget block: parent issue budget exhausted", nil
 	}
 
@@ -384,7 +394,17 @@ func (s *TaskService) canClaimBillableTask(ctx context.Context, candidate db.Age
 	if err != nil {
 		return false, "", fmt.Errorf("load workspace spend: %w", err)
 	}
-	if runtimepolicy.ShouldPauseAtCheckpoint(runtimepolicy.ThresholdState(monthlySpend, workspacePolicy.MonthlyBudgetCents), true) {
+	monthlyBudgetState := runtimepolicy.ThresholdState(monthlySpend, workspacePolicy.MonthlyBudgetCents)
+	if monthlyBudgetState != runtimepolicy.BudgetStateOK {
+		s.publishCheckpointEvent(util.UUIDToString(issue.WorkspaceID), protocol.TaskCheckpointPayload{
+			TaskID:      util.UUIDToString(candidate.ID),
+			WorkspaceID: util.UUIDToString(issue.WorkspaceID),
+			IssueID:     util.UUIDToString(issue.ID),
+			Reason:      "budget_threshold",
+			BudgetState: string(monthlyBudgetState),
+		})
+	}
+	if runtimepolicy.ShouldPauseAtCheckpoint(monthlyBudgetState, true) {
 		return false, "budget block: workspace monthly budget exhausted", nil
 	}
 
@@ -549,6 +569,18 @@ func (s *TaskService) CompleteTask(ctx context.Context, taskID pgtype.UUID, resu
 	}
 
 	slog.Info("task completed", "task_id", util.UUIDToString(task.ID), "issue_id", util.UUIDToString(task.IssueID))
+
+	var completedPayload protocol.TaskCompletedPayload
+	if err := json.Unmarshal(result, &completedPayload); err == nil && completedPayload.PRURL != "" {
+		workspaceID := s.ResolveTaskWorkspaceID(ctx, task)
+		s.publishCheckpointEvent(workspaceID, protocol.TaskCheckpointPayload{
+			TaskID:      util.UUIDToString(task.ID),
+			WorkspaceID: workspaceID,
+			IssueID:     util.UUIDToString(task.IssueID),
+			Reason:      "pr_updated",
+			PRURL:       completedPayload.PRURL,
+		})
+	}
 
 	// Post agent output as a comment, but only for assignment-triggered issue tasks
 	// where the agent did NOT already post a comment during execution.
@@ -726,6 +758,15 @@ func (s *TaskService) ReportProgress(ctx context.Context, taskID string, workspa
 			Total:   total,
 		},
 	})
+	if runtimepolicy.IsSafeCheckpointBoundary(summary) {
+		s.publishCheckpointEvent(workspaceID, protocol.TaskCheckpointPayload{
+			TaskID:  taskID,
+			Reason:  "safe_checkpoint_boundary",
+			Summary: summary,
+			Step:    step,
+			Total:   total,
+		})
+	}
 }
 
 // ReconcileAgentStatus checks running task count and sets agent status accordingly.
@@ -909,6 +950,19 @@ func (s *TaskService) ResolveTaskWorkspaceID(ctx context.Context, task db.AgentT
 		}
 	}
 	return ""
+}
+
+func (s *TaskService) publishCheckpointEvent(workspaceID string, payload protocol.TaskCheckpointPayload) {
+	if s.Bus == nil || workspaceID == "" {
+		return
+	}
+	s.Bus.Publish(events.Event{
+		Type:        protocol.EventTaskCheckpoint,
+		WorkspaceID: workspaceID,
+		ActorType:   "system",
+		ActorID:     "",
+		Payload:     payload,
+	})
 }
 
 func (s *TaskService) broadcastChatDone(ctx context.Context, task db.AgentTaskQueue) {

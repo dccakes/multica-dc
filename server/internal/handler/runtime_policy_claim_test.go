@@ -7,8 +7,10 @@ import (
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/runtimepolicy"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 func createRuntimePolicyClaimTestRuntime(t *testing.T, runtimeMode, provider, name string) (string, string) {
@@ -220,6 +222,48 @@ func TestClaimTaskForRuntime_SkipsBillableWhenParentBudgetBlocked(t *testing.T) 
 	}
 	if !found {
 		t.Fatalf("expected out-of-budget system comment on issue thread, got %#v", comments)
+	}
+}
+
+func TestClaimTaskForRuntime_EmitsCheckpointWhenParentBudgetBlocked(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	h, bus := newCheckpointTestHandler(t)
+	upsertRuntimePolicyWorkspace(t, 10_000, 2, 100)
+	runtimeID, agentID := createRuntimePolicyClaimTestRuntime(t, "cloud", "vercel", "Budget Checkpoint Runtime")
+	parentIssueID := createRuntimePolicyClaimTestIssue(t, "parent checkpoint issue", "")
+	childIssueID := createRuntimePolicyClaimTestIssue(t, "child checkpoint issue", parentIssueID)
+
+	burnTaskID := createRuntimePolicyClaimTestBurnTask(t, agentID, parentIssueID, runtimeID)
+	insertRuntimePolicyLedger(t, burnTaskID, parentIssueID, parentIssueID, runtimeID, 100)
+	createRuntimePolicyClaimTestQueuedTask(t, agentID, childIssueID, runtimeID)
+
+	checkpoints := make([]protocol.TaskCheckpointPayload, 0, 1)
+	bus.Subscribe(protocol.EventTaskCheckpoint, func(e events.Event) {
+		payload, ok := e.Payload.(protocol.TaskCheckpointPayload)
+		if !ok {
+			t.Fatalf("checkpoint payload type = %T, want protocol.TaskCheckpointPayload", e.Payload)
+		}
+		checkpoints = append(checkpoints, payload)
+	})
+
+	task, err := h.TaskService.ClaimTaskForRuntime(context.Background(), parseUUID(runtimeID))
+	if err != nil {
+		t.Fatalf("ClaimTaskForRuntime: %v", err)
+	}
+	if task != nil {
+		t.Fatalf("expected billable task to be blocked, got %#v", task)
+	}
+	if len(checkpoints) != 1 {
+		t.Fatalf("checkpoint events = %d, want 1", len(checkpoints))
+	}
+	if checkpoints[0].Reason != "budget_threshold" {
+		t.Fatalf("checkpoint reason = %q, want budget_threshold", checkpoints[0].Reason)
+	}
+	if checkpoints[0].BudgetState != string(runtimepolicy.BudgetStateBlocked) {
+		t.Fatalf("checkpoint budget state = %q, want %q", checkpoints[0].BudgetState, runtimepolicy.BudgetStateBlocked)
 	}
 }
 
