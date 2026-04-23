@@ -43,6 +43,7 @@ func TestPersistCloudRuntimeSession_WritesIssueContinuity(t *testing.T) {
 		IssueID:   issueID,
 		Priority:  0,
 		RuntimeID: runtimeID,
+		Context:   nil,
 	})
 	if err != nil {
 		t.Fatalf("create task: %v", err)

@@ -1216,6 +1216,112 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
+type IssueInterventionRequest struct {
+	Action runtimepolicy.InterventionAction `json:"action"`
+}
+
+func (h *Handler) ApplyIssueIntervention(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	issue, ok := h.loadIssueForUser(w, r, id)
+	if !ok {
+		return
+	}
+
+	var req IssueInterventionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	targetStatus, ok := runtimepolicy.InterventionActionTargetStatus(req.Action)
+	if !ok {
+		writeError(w, http.StatusBadRequest, "unknown intervention action")
+		return
+	}
+
+	userID := requestUserID(r)
+	workspaceID := uuidToString(issue.WorkspaceID)
+	actorType, actorID := h.resolveActor(r, userID, workspaceID)
+	member, err := h.getWorkspaceMember(r.Context(), userID, workspaceID)
+	if err != nil {
+		writeError(w, http.StatusForbidden, "workspace access required")
+		return
+	}
+	ownerID, hasOwner := runtimepolicy.ResolveIssueOwner(
+		issue.AssigneeType.String,
+		uuidToString(issue.AssigneeID),
+		issue.CreatorType,
+		uuidToString(issue.CreatorID),
+	)
+	if actorType != "member" {
+		writeError(w, http.StatusForbidden, "only a human owner can intervene on an issue")
+		return
+	}
+	if !roleAllowed(member.Role, "owner", "admin") && (!hasOwner || ownerID != actorID) {
+		writeError(w, http.StatusForbidden, "only the issue owner or workspace admin can intervene on this issue")
+		return
+	}
+
+	if err := h.TaskService.CancelTasksForIssue(r.Context(), issue.ID); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to cancel active tasks")
+		return
+	}
+
+	params := db.UpdateIssueParams{
+		ID:             issue.ID,
+		Title:          pgtype.Text{String: issue.Title, Valid: true},
+		Description:    issue.Description,
+		Status:         pgtype.Text{String: targetStatus, Valid: true},
+		Priority:       pgtype.Text{String: issue.Priority, Valid: true},
+		AssigneeType:   issue.AssigneeType,
+		AssigneeID:     issue.AssigneeID,
+		Position:       pgtype.Float8{Float64: issue.Position, Valid: true},
+		DueDate:        issue.DueDate,
+		ParentIssueID:  issue.ParentIssueID,
+		ProjectID:      issue.ProjectID,
+		EstimatedHours: issue.EstimatedHours,
+		EstimateSource: issue.EstimateSource,
+	}
+
+	updated, err := h.Queries.UpdateIssue(r.Context(), params)
+	if err != nil {
+		slog.Warn("apply issue intervention failed", append(logger.RequestAttrs(r), "error", err, "issue_id", id, "workspace_id", workspaceID)...)
+		writeError(w, http.StatusInternalServerError, "failed to update issue")
+		return
+	}
+
+	if req.Action == runtimepolicy.InterventionActionArchive || req.Action == runtimepolicy.InterventionActionForceClose {
+		h.clearIssueRuntimePolicyOverride(r.Context(), uuidToString(updated.ID))
+	}
+
+	if req.Action == runtimepolicy.InterventionActionResumeSandbox || req.Action == runtimepolicy.InterventionActionResumeSnapshot || req.Action == runtimepolicy.InterventionActionHandoffLocal {
+		if h.isAgentAssigneeReady(r.Context(), updated) {
+			if _, err := h.TaskService.EnqueueTaskForIssueWithContext(r.Context(), updated, interventionTaskContext(req.Action)); err != nil {
+				slog.Warn("enqueue intervention task failed", append(logger.RequestAttrs(r), "error", err, "issue_id", id, "workspace_id", workspaceID)...)
+			}
+		}
+	}
+
+	prefix := h.getIssuePrefix(r.Context(), updated.WorkspaceID)
+	resp := issueToResponse(updated, prefix)
+	slog.Info("issue intervention applied", append(logger.RequestAttrs(r), "issue_id", id, "workspace_id", workspaceID, "action", req.Action, "status", targetStatus)...)
+	h.publish(protocol.EventIssueUpdated, workspaceID, actorType, actorID, map[string]any{
+		"issue":           resp,
+		"status_changed":  issue.Status != updated.Status,
+		"prev_status":     issue.Status,
+		"creator_type":    issue.CreatorType,
+		"creator_id":      uuidToString(issue.CreatorID),
+		"intervention":    string(req.Action),
+		"intervention_to": targetStatus,
+		"assignee_type":   textToPtr(issue.AssigneeType),
+		"assignee_id":     uuidToPtr(issue.AssigneeID),
+		"workspace_id":    workspaceID,
+		"runtime_action":  string(req.Action),
+	})
+
+	writeJSON(w, http.StatusOK, resp)
+}
+
 // canAssignAgent checks whether the requesting user is allowed to assign issues
 // to the given agent. Private agents can only be assigned by their owner or
 // workspace admins/owners.
@@ -1245,6 +1351,16 @@ func (h *Handler) canAssignAgent(ctx context.Context, r *http.Request, agentID, 
 		return true, ""
 	}
 	return false, "cannot assign to private agent"
+}
+
+func interventionTaskContext(action runtimepolicy.InterventionAction) []byte {
+	ctx, err := json.Marshal(map[string]string{
+		"intervention_action": string(action),
+	})
+	if err != nil {
+		return nil
+	}
+	return ctx
 }
 
 // shouldEnqueueAgentTask returns true when an issue creation or assignment

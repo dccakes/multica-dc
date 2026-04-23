@@ -191,6 +191,9 @@ func (p *Provider) runtimeEnv(task provider.Task) map[string]string {
 	if task.ChatMessage != "" {
 		env["MULTICA_CHAT_MESSAGE"] = task.ChatMessage
 	}
+	if len(task.Context) > 0 {
+		env["MULTICA_TASK_CONTEXT"] = string(task.Context)
+	}
 	if len(task.RuntimeMetadata) > 0 {
 		if raw, err := json.Marshal(task.RuntimeMetadata); err == nil {
 			env["MULTICA_RUNTIME_METADATA"] = string(raw)

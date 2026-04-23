@@ -2,6 +2,7 @@ package cloudrunner
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/multica-ai/multica/server/internal/cloudrunner/provider"
+	"github.com/multica-ai/multica/server/internal/runtimepolicy"
 )
 
 const defaultCheckpointInterval = 5 * time.Minute
@@ -146,16 +148,21 @@ func (r *Runner) claimLoop(ctx context.Context) {
 				continue
 			}
 			providerTask := provider.Task(*task)
+			preferredResumeMode := preferredResumeModeForTaskContext(providerTask.Context)
 			var checkpoint RecordSnapshotInput
 			checkpointActive := false
 			if r.session != nil && (providerTask.IssueID != "" || providerTask.ChatSessionID != "") {
-				selection, err := r.session.ResolveSnapshot(ctx, ResolveSnapshotInput{
+				resolveInput := ResolveSnapshotInput{
 					RuntimeID:      providerTask.RuntimeID,
 					AgentID:        providerTask.AgentID,
 					IssueID:        providerTask.IssueID,
 					ChatSessionID:  providerTask.ChatSessionID,
 					BaseSnapshotID: "",
-				})
+				}
+				if preferredResumeMode != "" {
+					resolveInput.PreferredResumeMode = preferredResumeMode
+				}
+				selection, err := r.session.ResolveSnapshot(ctx, resolveInput)
 				if err != nil {
 					r.logger.Warn("snapshot continuity resolve failed", "task_id", task.ID, "error", err)
 				} else {
@@ -291,4 +298,26 @@ func (r *Runner) runtimeIDs() []string {
 		return []string{runtimeID}
 	}
 	return nil
+}
+
+func preferredResumeModeForTaskContext(raw json.RawMessage) ResumeMode {
+	if len(raw) == 0 {
+		return ""
+	}
+	var payload struct {
+		InterventionAction runtimepolicy.InterventionAction `json:"intervention_action"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return ""
+	}
+	switch payload.InterventionAction {
+	case runtimepolicy.InterventionActionResumeSandbox:
+		return ResumeModeSandbox
+	case runtimepolicy.InterventionActionResumeSnapshot:
+		return ResumeModeSnapshot
+	case runtimepolicy.InterventionActionHandoffLocal:
+		return ResumeModeLocal
+	default:
+		return ""
+	}
 }

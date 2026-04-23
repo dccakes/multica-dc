@@ -2,27 +2,29 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 )
 
 // Task represents the daemon claim payload used by cloudrunner providers.
 type Task struct {
-	ID                    string         `json:"id"`
-	AgentID               string         `json:"agent_id"`
-	RuntimeID             string         `json:"runtime_id"`
-	IssueID               string         `json:"issue_id"`
-	WorkspaceID           string         `json:"workspace_id"`
-	RuntimeMetadata       map[string]any `json:"runtime_metadata,omitempty"`
-	PriorSessionID        string         `json:"prior_session_id,omitempty"`
-	PriorWorkDir          string         `json:"prior_work_dir,omitempty"`
-	TriggerCommentID      string         `json:"trigger_comment_id,omitempty"`
-	TriggerCommentContent string         `json:"trigger_comment_content,omitempty"`
-	ChatSessionID         string         `json:"chat_session_id,omitempty"`
-	ChatMessage           string         `json:"chat_message,omitempty"`
-	Repos                 []RepoData     `json:"repos,omitempty"`
-	Agent                 *AgentData     `json:"agent,omitempty"`
-	ResumeSnapshotID      string         `json:"resume_snapshot_id,omitempty"`
-	ResumeSource          string         `json:"resume_source,omitempty"`
+	ID                    string          `json:"id"`
+	AgentID               string          `json:"agent_id"`
+	RuntimeID             string          `json:"runtime_id"`
+	IssueID               string          `json:"issue_id"`
+	WorkspaceID           string          `json:"workspace_id"`
+	RuntimeMetadata       map[string]any  `json:"runtime_metadata,omitempty"`
+	Context               json.RawMessage `json:"context,omitempty"`
+	PriorSessionID        string          `json:"prior_session_id,omitempty"`
+	PriorWorkDir          string          `json:"prior_work_dir,omitempty"`
+	TriggerCommentID      string          `json:"trigger_comment_id,omitempty"`
+	TriggerCommentContent string          `json:"trigger_comment_content,omitempty"`
+	ChatSessionID         string          `json:"chat_session_id,omitempty"`
+	ChatMessage           string          `json:"chat_message,omitempty"`
+	Repos                 []RepoData      `json:"repos,omitempty"`
+	Agent                 *AgentData      `json:"agent,omitempty"`
+	ResumeSnapshotID      string          `json:"resume_snapshot_id,omitempty"`
+	ResumeSource          string          `json:"resume_source,omitempty"`
 }
 
 type RepoData struct {

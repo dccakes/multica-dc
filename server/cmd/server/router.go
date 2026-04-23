@@ -232,6 +232,7 @@ func NewRouter(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus) chi.Route
 				r.Route("/{id}", func(r chi.Router) {
 					r.Get("/", h.GetIssue)
 					r.Put("/", h.UpdateIssue)
+					r.Post("/intervention", h.ApplyIssueIntervention)
 					r.Delete("/", h.DeleteIssue)
 					r.Get("/runtime-policy", h.GetIssueRuntimePolicy)
 					r.Put("/runtime-policy", h.UpdateIssueRuntimePolicy)

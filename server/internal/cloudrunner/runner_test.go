@@ -424,6 +424,57 @@ func TestRunnerClaimLoop_IncludesResumeSnapshotFromSessionService(t *testing.T) 
 	}
 }
 
+func TestRunnerClaimLoop_RespectsResumeSandboxInterventionContext(t *testing.T) {
+	client := &fakeLifecycleClient{
+		claimTasks: []*Task{{
+			ID:        "task-1",
+			RuntimeID: "11111111-1111-1111-1111-111111111111",
+			AgentID:   "22222222-2222-2222-2222-222222222222",
+			IssueID:   "33333333-3333-3333-3333-333333333333",
+			Context:   []byte(`{"intervention_action":"resume_from_sandbox"}`),
+		}},
+	}
+	p := &fakeProvider{handledCh: make(chan struct{}, 1)}
+	session := NewSessionService(&fakeSessionStoreForRunner{
+		session: db.CloudRuntimeSession{
+			LastSnapshotID:     pgtype.Text{String: "snap_resume", Valid: true},
+			LastWorkdir:        pgtype.Text{String: "/workspace", Valid: true},
+			LastBranch:         pgtype.Text{String: "main", Valid: true},
+			LastCodexSessionID: pgtype.Text{String: "codex_1", Valid: true},
+		},
+	})
+
+	runner := NewRunner(Config{
+		RuntimeIDs:        []string{"rt-1"},
+		AuthToken:         "token",
+		HeartbeatInterval: time.Hour,
+		ClaimInterval:     5 * time.Millisecond,
+	}, client, p).WithSessionService(session)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go runner.claimLoop(ctx)
+
+	select {
+	case <-p.handledCh:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timed out waiting for handled task")
+	}
+	cancel()
+
+	_, _, _, _, handled := p.snapshot()
+	if len(handled) == 0 {
+		t.Fatal("expected handled task")
+	}
+	got := handled[0]
+	if got.ResumeSnapshotID != "" {
+		t.Fatalf("ResumeSnapshotID = %q, want empty when sandbox resume is explicitly requested", got.ResumeSnapshotID)
+	}
+	if got.ResumeSource != "sandbox" {
+		t.Fatalf("ResumeSource = %q, want sandbox", got.ResumeSource)
+	}
+}
+
 func TestRunnerClaimLoop_PersistsTransitionAndHeartbeatCheckpoints(t *testing.T) {
 	sessionExpiry := time.Now().UTC().Add(2 * time.Hour)
 	client := &fakeLifecycleClient{

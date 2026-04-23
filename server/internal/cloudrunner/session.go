@@ -40,11 +40,12 @@ func NewSessionService(store SessionStore) *SessionService {
 }
 
 type ResolveSnapshotInput struct {
-	RuntimeID      string
-	AgentID        string
-	IssueID        string
-	ChatSessionID  string
-	BaseSnapshotID string
+	RuntimeID           string
+	AgentID             string
+	IssueID             string
+	ChatSessionID       string
+	BaseSnapshotID      string
+	PreferredResumeMode ResumeMode
 }
 
 type ResumeSelection struct {
@@ -59,6 +60,29 @@ type ResumeSelection struct {
 func (s *SessionService) ResolveSnapshot(ctx context.Context, in ResolveSnapshotInput) (ResumeSelection, error) {
 	if in.IssueID == "" && in.ChatSessionID == "" {
 		return ResumeSelection{}, fmt.Errorf("issue_id or chat_session_id is required")
+	}
+
+	if in.PreferredResumeMode != "" {
+		switch in.PreferredResumeMode {
+		case ResumeModeSandbox:
+			if selection, ok, err := s.loadPreferredSelection(ctx, in, false, "sandbox"); err != nil {
+				return ResumeSelection{}, err
+			} else if ok {
+				return selection, nil
+			}
+			return ResumeSelection{Source: string(ResumeModeSandbox)}, nil
+		case ResumeModeSnapshot:
+			if selection, ok, err := s.loadPreferredSelection(ctx, in, true, "resume"); err != nil {
+				return ResumeSelection{}, err
+			} else if ok {
+				return selection, nil
+			}
+			return ResumeSelection{}, fmt.Errorf("snapshot resume requested but no usable snapshot is available")
+		case ResumeModeLocal:
+			return ResumeSelection{Source: string(ResumeModeLocal)}, nil
+		default:
+			return ResumeSelection{}, fmt.Errorf("unsupported preferred resume mode %q", in.PreferredResumeMode)
+		}
 	}
 
 	if in.IssueID != "" {
@@ -94,6 +118,38 @@ func (s *SessionService) ResolveSnapshot(ctx context.Context, in ResolveSnapshot
 		return ResumeSelection{Source: "base", SnapshotID: in.BaseSnapshotID}, nil
 	}
 	return ResumeSelection{Source: "none"}, nil
+}
+
+func (s *SessionService) loadPreferredSelection(ctx context.Context, in ResolveSnapshotInput, includeSnapshot bool, source string) (ResumeSelection, bool, error) {
+	if in.IssueID != "" {
+		session, err := s.store.GetCloudRuntimeSessionForIssue(ctx, db.GetCloudRuntimeSessionForIssueParams{
+			RuntimeID: parseUUIDOrZero(in.RuntimeID),
+			AgentID:   parseUUIDOrZero(in.AgentID),
+			IssueID:   parseUUIDOrZero(in.IssueID),
+		})
+		if err == nil {
+			if selection, ok := preferredSelectionFromSession(session, s.now(), includeSnapshot, source); ok {
+				return selection, true, nil
+			}
+		} else if !errors.Is(err, pgx.ErrNoRows) {
+			return ResumeSelection{}, false, err
+		}
+	}
+	if in.ChatSessionID != "" {
+		session, err := s.store.GetCloudRuntimeSessionForChat(ctx, db.GetCloudRuntimeSessionForChatParams{
+			RuntimeID:     parseUUIDOrZero(in.RuntimeID),
+			AgentID:       parseUUIDOrZero(in.AgentID),
+			ChatSessionID: parseUUIDOrZero(in.ChatSessionID),
+		})
+		if err == nil {
+			if selection, ok := preferredSelectionFromSession(session, s.now(), includeSnapshot, source); ok {
+				return selection, true, nil
+			}
+		} else if !errors.Is(err, pgx.ErrNoRows) {
+			return ResumeSelection{}, false, err
+		}
+	}
+	return ResumeSelection{}, false, nil
 }
 
 type RecordSnapshotInput struct {
@@ -172,6 +228,32 @@ func validateCheckpointInput(in RecordSnapshotInput) error {
 }
 
 func resumeSelectionFromSession(session db.CloudRuntimeSession, now time.Time) (ResumeSelection, bool) {
+	return preferredSelectionFromSession(session, now, true, "resume")
+}
+
+func preferredSelectionFromSession(session db.CloudRuntimeSession, now time.Time, includeSnapshot bool, source string) (ResumeSelection, bool) {
+	if !session.LastWorkdir.Valid || !session.LastBranch.Valid || !session.LastCodexSessionID.Valid {
+		return ResumeSelection{}, false
+	}
+	selection := ResumeSelection{
+		Source:         source,
+		LastWorkdir:    session.LastWorkdir.String,
+		LastBranch:     session.LastBranch.String,
+		CodexSessionID: session.LastCodexSessionID.String,
+	}
+	if includeSnapshot {
+		if !session.LastSnapshotID.Valid || !snapshotUsable(session.SnapshotExpiresAt, now) {
+			return ResumeSelection{}, false
+		}
+		selection.SnapshotID = session.LastSnapshotID.String
+		if session.SnapshotExpiresAt.Valid {
+			selection.SnapshotExpiresAt = session.SnapshotExpiresAt.Time
+		}
+	}
+	return selection, true
+}
+
+func resumeSelectionFromSessionLegacy(session db.CloudRuntimeSession, now time.Time) (ResumeSelection, bool) {
 	if !session.LastSnapshotID.Valid || !snapshotUsable(session.SnapshotExpiresAt, now) {
 		return ResumeSelection{}, false
 	}
