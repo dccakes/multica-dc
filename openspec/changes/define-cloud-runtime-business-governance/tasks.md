@@ -26,7 +26,7 @@
 - [x] 4.1 Implement checkpoint writes on every state transition and 5-minute in-progress heartbeat
 - [ ] 4.2 Implement immediate checkpoint triggers (PR opened/updated, intervention transition, threshold crossing, pre-force-close)
 - [ ] 4.3 Implement safe-checkpoint pause boundaries (command step, git step, PR sync step, persisted checkpoint)
-- [ ] 4.4 Implement resume eligibility checks (sandbox health + budget) and fallback order (sandbox -> snapshot -> local handoff)
+- [x] 4.4 Implement resume eligibility checks (sandbox health + budget) and fallback order (sandbox -> snapshot -> local handoff)
 
 ## 5. UX and Communication Surfaces
 
