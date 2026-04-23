@@ -1,9 +1,9 @@
 ## 1. Policy Model and Data Contracts
 
-- [ ] 1.1 Define shared policy enums/constants for runtime type, budget states, intervention outcomes, and completion states
+- [x] 1.1 Define shared policy enums/constants for runtime type, budget states, intervention outcomes, and completion states
 - [x] 1.2 Define checkpoint payload contract with required persisted fields for portable resume
-- [ ] 1.3 Define budget threshold and enforcement contract (80/90 warnings, 100 block with safe-checkpoint pause)
-- [ ] 1.4 Define role/permission contract for admin-only budget controls and issue-owner completion authority
+- [x] 1.3 Define budget threshold and enforcement contract (80/90 warnings, 100 block with safe-checkpoint pause)
+- [x] 1.4 Define role/permission contract for admin-only budget controls and issue-owner completion authority
 
 ## 2. Budget Enforcement and Concurrency Controls
 
@@ -32,9 +32,9 @@
 
 - [ ] 5.1 Add budget-block issue-thread comment behavior for out-of-budget transitions
 - [ ] 5.2 Expose admin controls for budget caps and concurrency limits in runtime management surfaces
-- [ ] 5.3 Expose blocked/paused/intervention statuses clearly in issue and runtime views
-- [ ] 5.4 Show permission-denied feedback for non-admin budget control attempts
-- [ ] 5.5 Ensure configured and bootstrapped Vercel sandboxes appear in runtimes list as remote runtimes, including offline visibility
+- [x] 5.3 Expose blocked/paused/intervention statuses clearly in issue and runtime views
+- [x] 5.4 Show permission-denied feedback for non-admin budget control attempts
+- [x] 5.5 Ensure configured and bootstrapped Vercel sandboxes appear in runtimes list as remote runtimes, including offline visibility
 
 ## 6. Metrics and Validation
 

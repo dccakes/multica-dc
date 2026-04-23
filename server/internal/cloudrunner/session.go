@@ -8,7 +8,6 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/multica-ai/multica/server/internal/runtimepolicy"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -40,11 +39,12 @@ type ResolveSnapshotInput struct {
 }
 
 type ResumeSelection struct {
-	Source         string
-	SnapshotID     string
-	LastWorkdir    string
-	LastBranch     string
-	CodexSessionID string
+	Source            string
+	SnapshotID        string
+	SnapshotExpiresAt time.Time
+	LastWorkdir       string
+	LastBranch        string
+	CodexSessionID    string
 }
 
 func (s *SessionService) ResolveSnapshot(ctx context.Context, in ResolveSnapshotInput) (ResumeSelection, error) {
@@ -59,14 +59,8 @@ func (s *SessionService) ResolveSnapshot(ctx context.Context, in ResolveSnapshot
 			IssueID:   parseUUIDOrZero(in.IssueID),
 		})
 		if err == nil {
-			if session.LastSnapshotID.Valid && snapshotUsable(session.SnapshotExpiresAt, s.now()) {
-				return ResumeSelection{
-					Source:         "resume",
-					SnapshotID:     session.LastSnapshotID.String,
-					LastWorkdir:    session.LastWorkdir.String,
-					LastBranch:     session.LastBranch.String,
-					CodexSessionID: session.LastCodexSessionID.String,
-				}, nil
+			if selection, ok := resumeSelectionFromSession(session, s.now()); ok {
+				return selection, nil
 			}
 		} else if !errors.Is(err, pgx.ErrNoRows) {
 			return ResumeSelection{}, err
@@ -79,14 +73,8 @@ func (s *SessionService) ResolveSnapshot(ctx context.Context, in ResolveSnapshot
 			ChatSessionID: parseUUIDOrZero(in.ChatSessionID),
 		})
 		if err == nil {
-			if session.LastSnapshotID.Valid && snapshotUsable(session.SnapshotExpiresAt, s.now()) {
-				return ResumeSelection{
-					Source:         "resume",
-					SnapshotID:     session.LastSnapshotID.String,
-					LastWorkdir:    session.LastWorkdir.String,
-					LastBranch:     session.LastBranch.String,
-					CodexSessionID: session.LastCodexSessionID.String,
-				}, nil
+			if selection, ok := resumeSelectionFromSession(session, s.now()); ok {
+				return selection, nil
 			}
 		} else if !errors.Is(err, pgx.ErrNoRows) {
 			return ResumeSelection{}, err
@@ -112,36 +100,22 @@ type RecordSnapshotInput struct {
 	CodexSessionID string
 }
 
-func (s *SessionService) RecordSnapshot(ctx context.Context, in RecordSnapshotInput) error {
-	if in.IssueID == "" && in.ChatSessionID == "" {
-		return fmt.Errorf("issue_id or chat_session_id is required")
-	}
-	if in.IssueID != "" && in.ChatSessionID != "" {
-		return fmt.Errorf("issue_id and chat_session_id are mutually exclusive")
-	}
+func (in RecordSnapshotInput) hasPortableResumeState() bool {
+	return in.SnapshotID != "" && in.LastWorkdir != "" && in.LastBranch != "" && in.CodexSessionID != ""
+}
 
-	checkpoint := runtimepolicy.Checkpoint{
-		RunID:          firstNonEmpty(in.CodexSessionID, in.SandboxID, in.RuntimeID),
-		RuntimeID:      in.RuntimeID,
-		AgentID:        in.AgentID,
-		IssueID:        in.IssueID,
-		ChatSessionID:  in.ChatSessionID,
-		ExecutionState: runtimepolicy.CompletionStateDone,
-		SandboxID:      in.SandboxID,
-		SnapshotID:     in.SnapshotID,
-		WorkDir:        in.LastWorkdir,
-		Branch:         in.LastBranch,
-		SessionID:      in.CodexSessionID,
-	}
-	if err := runtimepolicy.ValidateCheckpoint(checkpoint); err != nil {
+func (s *SessionService) RecordSnapshot(ctx context.Context, in RecordSnapshotInput) error {
+	if err := validateCheckpointInput(in); err != nil {
 		return err
 	}
 
 	expiresAt := pgtype.Timestamptz{}
 	createdAt := pgtype.Timestamptz{}
+	if in.SnapshotID != "" {
+		createdAt = pgtype.Timestamptz{Time: s.now().UTC(), Valid: true}
+	}
 	if !in.SnapshotExpiry.IsZero() {
 		expiresAt = pgtype.Timestamptz{Time: in.SnapshotExpiry.UTC(), Valid: true}
-		createdAt = pgtype.Timestamptz{Time: s.now().UTC(), Valid: true}
 	}
 
 	_, err := s.store.UpsertCloudRuntimeSession(ctx, db.UpsertCloudRuntimeSessionParams{
@@ -158,6 +132,55 @@ func (s *SessionService) RecordSnapshot(ctx context.Context, in RecordSnapshotIn
 		LastCodexSessionID: strText(in.CodexSessionID),
 	})
 	return err
+}
+
+func validateCheckpointInput(in RecordSnapshotInput) error {
+	if in.RuntimeID == "" {
+		return fmt.Errorf("runtime_id is required")
+	}
+	if in.AgentID == "" {
+		return fmt.Errorf("agent_id is required")
+	}
+	if in.IssueID == "" && in.ChatSessionID == "" {
+		return fmt.Errorf("issue_id or chat_session_id is required")
+	}
+	if in.IssueID != "" && in.ChatSessionID != "" {
+		return fmt.Errorf("issue_id and chat_session_id are mutually exclusive")
+	}
+	if in.SnapshotID == "" {
+		return nil
+	}
+	if in.LastWorkdir == "" {
+		return fmt.Errorf("last_workdir is required when snapshot_id is set")
+	}
+	if in.LastBranch == "" {
+		return fmt.Errorf("last_branch is required when snapshot_id is set")
+	}
+	if in.CodexSessionID == "" {
+		return fmt.Errorf("last_codex_session_id is required when snapshot_id is set")
+	}
+	return nil
+}
+
+func resumeSelectionFromSession(session db.CloudRuntimeSession, now time.Time) (ResumeSelection, bool) {
+	if !session.LastSnapshotID.Valid || !snapshotUsable(session.SnapshotExpiresAt, now) {
+		return ResumeSelection{}, false
+	}
+	if !session.LastWorkdir.Valid || !session.LastBranch.Valid || !session.LastCodexSessionID.Valid {
+		return ResumeSelection{}, false
+	}
+
+	selection := ResumeSelection{
+		Source:         "resume",
+		SnapshotID:     session.LastSnapshotID.String,
+		LastWorkdir:    session.LastWorkdir.String,
+		LastBranch:     session.LastBranch.String,
+		CodexSessionID: session.LastCodexSessionID.String,
+	}
+	if session.SnapshotExpiresAt.Valid {
+		selection.SnapshotExpiresAt = session.SnapshotExpiresAt.Time
+	}
+	return selection, true
 }
 
 func snapshotUsable(expiresAt pgtype.Timestamptz, now time.Time) bool {
@@ -183,13 +206,4 @@ func strText(s string) pgtype.Text {
 		return pgtype.Text{}
 	}
 	return pgtype.Text{String: s, Valid: true}
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if value != "" {
-			return value
-		}
-	}
-	return ""
 }

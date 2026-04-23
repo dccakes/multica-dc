@@ -11,6 +11,8 @@ import (
 	"github.com/multica-ai/multica/server/internal/cloudrunner/provider"
 )
 
+const defaultCheckpointInterval = 5 * time.Minute
+
 // RunnerClient describes the cloudrunner calls needed by lifecycle loops.
 type RunnerClient interface {
 	SendHeartbeat(ctx context.Context, runtimeID string) error
@@ -27,14 +29,20 @@ type Runner struct {
 	provider provider.Provider
 	session  *SessionService
 	logger   *slog.Logger
+
+	checkpointInterval time.Duration
+	checkpointMu       sync.RWMutex
+	activeCheckpoint   RecordSnapshotInput
+	hasCheckpoint      bool
 }
 
 func NewRunner(cfg Config, client RunnerClient, p provider.Provider) *Runner {
 	return &Runner{
-		cfg:      cfg,
-		client:   client,
-		provider: p,
-		logger:   slog.Default().With("component", "cloudrunner"),
+		cfg:                cfg,
+		client:             client,
+		provider:           p,
+		logger:             slog.Default().With("component", "cloudrunner"),
+		checkpointInterval: defaultCheckpointInterval,
 	}
 }
 
@@ -66,7 +74,7 @@ func (r *Runner) Run(ctx context.Context) error {
 	}()
 
 	var wg sync.WaitGroup
-	wg.Add(2)
+	wg.Add(3)
 	go func() {
 		defer wg.Done()
 		r.heartbeatLoop(ctx)
@@ -74,6 +82,10 @@ func (r *Runner) Run(ctx context.Context) error {
 	go func() {
 		defer wg.Done()
 		r.claimLoop(ctx)
+	}()
+	go func() {
+		defer wg.Done()
+		r.checkpointLoop(ctx)
 	}()
 
 	<-ctx.Done()
@@ -134,6 +146,8 @@ func (r *Runner) claimLoop(ctx context.Context) {
 				continue
 			}
 			providerTask := provider.Task(*task)
+			var checkpoint RecordSnapshotInput
+			checkpointActive := false
 			if r.session != nil && (providerTask.IssueID != "" || providerTask.ChatSessionID != "") {
 				selection, err := r.session.ResolveSnapshot(ctx, ResolveSnapshotInput{
 					RuntimeID:      providerTask.RuntimeID,
@@ -153,10 +167,31 @@ func (r *Runner) claimLoop(ctx context.Context) {
 					if providerTask.PriorSessionID == "" {
 						providerTask.PriorSessionID = selection.CodexSessionID
 					}
+					checkpoint = RecordSnapshotInput{
+						RuntimeID:      task.RuntimeID,
+						AgentID:        task.AgentID,
+						IssueID:        task.IssueID,
+						ChatSessionID:  task.ChatSessionID,
+						SnapshotID:     selection.SnapshotID,
+						SnapshotExpiry: selection.SnapshotExpiresAt,
+						LastWorkdir:    selection.LastWorkdir,
+						LastBranch:     selection.LastBranch,
+						CodexSessionID: selection.CodexSessionID,
+					}
+					if checkpoint.hasPortableResumeState() {
+						r.setActiveCheckpoint(checkpoint)
+						checkpointActive = true
+						if err := r.persistCheckpoint(ctx, checkpoint, "transition"); err != nil {
+							r.logger.Warn("snapshot continuity persist failed", "task_id", task.ID, "error", err)
+						}
+					}
 				}
 			}
 
 			result, err := r.provider.ExecuteTask(ctx, providerTask)
+			if checkpointActive {
+				r.clearActiveCheckpoint()
+			}
 			if err != nil {
 				r.logger.Warn("task execution failed", "task_id", task.ID, "error", err)
 				if reportErr := r.client.FailTask(ctx, task.ID, err.Error(), "", ""); reportErr != nil {
@@ -168,7 +203,7 @@ func (r *Runner) claimLoop(ctx context.Context) {
 				r.logger.Warn("complete report failed", "task_id", task.ID, "error", err)
 			}
 			if r.session != nil && result.SnapshotID != "" {
-				if err := r.session.RecordSnapshot(ctx, RecordSnapshotInput{
+				if err := r.persistCheckpoint(ctx, RecordSnapshotInput{
 					RuntimeID:      task.RuntimeID,
 					AgentID:        task.AgentID,
 					IssueID:        task.IssueID,
@@ -179,12 +214,73 @@ func (r *Runner) claimLoop(ctx context.Context) {
 					LastWorkdir:    result.WorkDir,
 					LastBranch:     result.Branch,
 					CodexSessionID: result.SessionID,
-				}); err != nil {
+				}, "completion"); err != nil {
 					r.logger.Warn("snapshot continuity persist failed", "task_id", task.ID, "error", err)
 				}
 			}
 		}
 	}
+}
+
+func (r *Runner) checkpointLoop(ctx context.Context) {
+	if r.session == nil {
+		return
+	}
+
+	ticker := time.NewTicker(r.checkpointCadence())
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			checkpoint, ok := r.currentCheckpoint()
+			if !ok {
+				continue
+			}
+			if err := r.persistCheckpoint(ctx, checkpoint, "heartbeat"); err != nil {
+				r.logger.Warn("checkpoint heartbeat persist failed", "error", err)
+			}
+		}
+	}
+}
+
+func (r *Runner) checkpointCadence() time.Duration {
+	if r.checkpointInterval > 0 {
+		return r.checkpointInterval
+	}
+	return defaultCheckpointInterval
+}
+
+func (r *Runner) setActiveCheckpoint(checkpoint RecordSnapshotInput) {
+	r.checkpointMu.Lock()
+	defer r.checkpointMu.Unlock()
+	r.activeCheckpoint = checkpoint
+	r.hasCheckpoint = true
+}
+
+func (r *Runner) clearActiveCheckpoint() {
+	r.checkpointMu.Lock()
+	defer r.checkpointMu.Unlock()
+	r.activeCheckpoint = RecordSnapshotInput{}
+	r.hasCheckpoint = false
+}
+
+func (r *Runner) currentCheckpoint() (RecordSnapshotInput, bool) {
+	r.checkpointMu.RLock()
+	defer r.checkpointMu.RUnlock()
+	if !r.hasCheckpoint {
+		return RecordSnapshotInput{}, false
+	}
+	return r.activeCheckpoint, true
+}
+
+func (r *Runner) persistCheckpoint(ctx context.Context, checkpoint RecordSnapshotInput, _ string) error {
+	if r.session == nil {
+		return nil
+	}
+	return r.session.RecordSnapshot(ctx, checkpoint)
 }
 
 func (r *Runner) runtimeIDs() []string {

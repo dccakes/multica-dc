@@ -129,6 +129,8 @@ type fakeProvider struct {
 	stopCalls  int
 	handleErr  error
 	handledCh  chan struct{}
+	releaseCh  chan struct{}
+	result     provider.Result
 }
 
 func (f *fakeProvider) Start(context.Context) error {
@@ -152,6 +154,8 @@ func (f *fakeProvider) ExecuteTask(_ context.Context, task Task) (provider.Resul
 	f.handled = append(f.handled, task)
 	ch := f.handledCh
 	err := f.handleErr
+	releaseCh := f.releaseCh
+	result := f.result
 	f.mu.Unlock()
 	if ch != nil {
 		select {
@@ -159,7 +163,13 @@ func (f *fakeProvider) ExecuteTask(_ context.Context, task Task) (provider.Resul
 		default:
 		}
 	}
-	return provider.Result{}, err
+	if releaseCh != nil {
+		<-releaseCh
+	}
+	if result.Output == "" && result.SessionID == "" && result.WorkDir == "" && result.Branch == "" && result.SandboxID == "" && result.SnapshotID == "" && result.SnapshotExpiresAt.IsZero() {
+		result = provider.Result{Output: "ok", WorkDir: "/workspace", Branch: "main", SessionID: "sess_1"}
+	}
+	return result, err
 }
 
 func (f *fakeProvider) snapshot() (started, stopped bool, startCalls, stopCalls int, handled []Task) {
@@ -171,19 +181,32 @@ func (f *fakeProvider) snapshot() (started, stopped bool, startCalls, stopCalls 
 }
 
 type fakeSessionStoreForRunner struct {
-	session db.CloudRuntimeSession
+	mu          sync.Mutex
+	session     db.CloudRuntimeSession
+	upsertCount int
+	lastUpsert  db.UpsertCloudRuntimeSessionParams
 }
 
 func (f *fakeSessionStoreForRunner) GetCloudRuntimeSessionForIssue(context.Context, db.GetCloudRuntimeSessionForIssueParams) (db.CloudRuntimeSession, error) {
 	return f.session, nil
 }
 
-func (f *fakeSessionStoreForRunner) UpsertCloudRuntimeSession(context.Context, db.UpsertCloudRuntimeSessionParams) (db.UpsertCloudRuntimeSessionRow, error) {
+func (f *fakeSessionStoreForRunner) UpsertCloudRuntimeSession(_ context.Context, arg db.UpsertCloudRuntimeSessionParams) (db.UpsertCloudRuntimeSessionRow, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.upsertCount++
+	f.lastUpsert = arg
 	return db.UpsertCloudRuntimeSessionRow{}, nil
 }
 
 func (f *fakeSessionStoreForRunner) GetCloudRuntimeSessionForChat(context.Context, db.GetCloudRuntimeSessionForChatParams) (db.CloudRuntimeSession, error) {
 	return db.CloudRuntimeSession{}, errors.New("not implemented in this test")
+}
+
+func (f *fakeSessionStoreForRunner) snapshot() (int, db.UpsertCloudRuntimeSessionParams) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.upsertCount, f.lastUpsert
 }
 
 func TestRunnerLifecycle_StartsLoopsAndDispatchesClaimedTask(t *testing.T) {
@@ -352,7 +375,7 @@ func TestRunnerClaimLoop_IncludesResumeSnapshotFromSessionService(t *testing.T) 
 	client := &fakeLifecycleClient{
 		claimTasks: []*Task{{
 			ID:        "task-1",
-			RuntimeID: "rt-1",
+			RuntimeID: "11111111-1111-1111-1111-111111111111",
 			AgentID:   "22222222-2222-2222-2222-222222222222",
 			IssueID:   "33333333-3333-3333-3333-333333333333",
 		}},
@@ -362,6 +385,7 @@ func TestRunnerClaimLoop_IncludesResumeSnapshotFromSessionService(t *testing.T) 
 		session: db.CloudRuntimeSession{
 			LastSnapshotID:     pgtype.Text{String: "snap_resume", Valid: true},
 			LastWorkdir:        pgtype.Text{String: "/workspace", Valid: true},
+			LastBranch:         pgtype.Text{String: "main", Valid: true},
 			LastCodexSessionID: pgtype.Text{String: "codex_1", Valid: true},
 		},
 	})
@@ -397,6 +421,102 @@ func TestRunnerClaimLoop_IncludesResumeSnapshotFromSessionService(t *testing.T) 
 	}
 	if got.PriorSessionID != "codex_1" {
 		t.Fatalf("PriorSessionID = %q, want codex_1", got.PriorSessionID)
+	}
+}
+
+func TestRunnerClaimLoop_PersistsTransitionAndHeartbeatCheckpoints(t *testing.T) {
+	sessionExpiry := time.Now().UTC().Add(2 * time.Hour)
+	client := &fakeLifecycleClient{
+		claimTasks: []*Task{{
+			ID:        "task-1",
+			RuntimeID: "rt-1",
+			AgentID:   "22222222-2222-2222-2222-222222222222",
+			IssueID:   "33333333-3333-3333-3333-333333333333",
+		}},
+	}
+	provider := &fakeProvider{
+		handledCh: make(chan struct{}, 1),
+		releaseCh: make(chan struct{}),
+		result: provider.Result{
+			Output:            "done",
+			WorkDir:           "/workspace",
+			Branch:            "main",
+			SessionID:         "codex_1",
+			SandboxID:         "sbx_1",
+			SnapshotID:        "snap_new",
+			SnapshotExpiresAt: time.Now().UTC().Add(24 * time.Hour),
+		},
+	}
+	sessionStore := &fakeSessionStoreForRunner{
+		session: db.CloudRuntimeSession{
+			LastSnapshotID:     pgtype.Text{String: "snap_resume", Valid: true},
+			SnapshotExpiresAt:  pgtype.Timestamptz{Time: sessionExpiry, Valid: true},
+			LastWorkdir:        pgtype.Text{String: "/workspace", Valid: true},
+			LastBranch:         pgtype.Text{String: "feature/a", Valid: true},
+			LastCodexSessionID: pgtype.Text{String: "codex_123", Valid: true},
+		},
+	}
+	session := NewSessionService(sessionStore)
+
+	runner := NewRunner(Config{
+		RuntimeID:         "rt-1",
+		RuntimeIDs:        []string{"rt-1"},
+		AuthToken:         "token",
+		HeartbeatInterval: 5 * time.Millisecond,
+		ClaimInterval:     5 * time.Millisecond,
+	}, client, provider).WithSessionService(session)
+	runner.checkpointInterval = 5 * time.Millisecond
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		done <- runner.Run(ctx)
+	}()
+
+	select {
+	case <-provider.handledCh:
+	case <-time.After(750 * time.Millisecond):
+		t.Fatal("timed out waiting for task execution to start")
+	}
+
+	waitUntil := func(cond func() bool, timeout time.Duration) bool {
+		deadline := time.Now().Add(timeout)
+		for time.Now().Before(deadline) {
+			if cond() {
+				return true
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+		return cond()
+	}
+
+	if !waitUntil(func() bool {
+		count, _ := sessionStore.snapshot()
+		return count >= 2
+	}, 400*time.Millisecond) {
+		count, _ := sessionStore.snapshot()
+		t.Fatalf("checkpoint upserts = %d, want >= 2 before task release", count)
+	}
+
+	close(provider.releaseCh)
+
+	if !waitUntil(func() bool {
+		count, _ := sessionStore.snapshot()
+		return count >= 3
+	}, 400*time.Millisecond) {
+		count, _ := sessionStore.snapshot()
+		t.Fatalf("checkpoint upserts = %d, want >= 3 after task completion", count)
+	}
+
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Run() error = %v, want context canceled", err)
+		}
+	case <-time.After(750 * time.Millisecond):
+		t.Fatal("timed out waiting for runner shutdown")
 	}
 }
 

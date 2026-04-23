@@ -32,6 +32,10 @@ func (s *Service) CanCompleteIssue(isIssueOwner bool) bool {
 	return CanCompleteIssue(isIssueOwner)
 }
 
+func (s *Service) CanOverrideAgentAssumption(hasPermission bool) bool {
+	return CanOverrideAgentAssumption(hasPermission)
+}
+
 func (s *Service) ValidateCheckpoint(cp Checkpoint) error {
 	return ValidateCheckpoint(cp)
 }

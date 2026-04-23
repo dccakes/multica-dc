@@ -48,8 +48,11 @@ func TestThresholdTransitions(t *testing.T) {
 }
 
 func TestPermissionHelpers(t *testing.T) {
-	if !CanManageBudgets("owner") || !CanManageBudgets("admin") {
-		t.Fatal("owner/admin must manage budgets")
+	if !CanManageBudgets("admin") {
+		t.Fatal("admin must manage budgets")
+	}
+	if CanManageBudgets("owner") {
+		t.Fatal("owner must not manage budgets")
 	}
 	if CanManageBudgets("member") {
 		t.Fatal("member must not manage budgets")
@@ -59,6 +62,22 @@ func TestPermissionHelpers(t *testing.T) {
 	}
 	if CanCompleteIssue(false) {
 		t.Fatal("non-owner must not complete issue")
+	}
+	if !CanOverrideAgentAssumption(true) {
+		t.Fatal("permissioned human must override agent assumptions")
+	}
+	if CanOverrideAgentAssumption(false) {
+		t.Fatal("unpermissioned human must not override agent assumptions")
+	}
+}
+
+func TestServicePermissionFacade(t *testing.T) {
+	svc := NewService()
+	if svc.CanManageBudgets("admin") != true {
+		t.Fatal("service must expose admin budget management")
+	}
+	if svc.CanOverrideAgentAssumption(true) != true {
+		t.Fatal("service must expose permissioned override helper")
 	}
 }
 
